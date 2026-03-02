@@ -1,0 +1,38 @@
+# Fallback override: opt infra namespace OUT of Istio ambient mesh.
+#
+# Use this file when PostgreSQL or Keycloak liveness/readiness probes fail
+# after mesh enrolment. Apply as a Helm values override:
+#
+#   helm upgrade namespaces ./infra/helm/namespaces \
+#     -f infra/helm/namespaces/values.yaml \
+#     -f infra/helm/namespaces/values-infra-no-mesh.yaml
+#
+# This overrides ONLY the infra namespace entry. All other namespaces are
+# unchanged. The register namespace remains enrolled and all its security
+# properties are unaffected.
+#
+# To re-enable mesh for infra once the root cause is resolved:
+#   helm upgrade namespaces ./infra/helm/namespaces -f infra/helm/namespaces/values.yaml
+#
+# Security implication of using this file:
+#   app → postgres  : plain TCP (no ztunnel mTLS)
+#   app → keycloak  : plain TCP (no ztunnel mTLS)
+# This is acceptable on a single node where traffic does not cross a physical
+# wire. On a multi-node cluster, re-enabling mesh enrolment is strongly advised.
+#
+# Root cause diagnosis before falling back:
+#   kubectl -n infra get events --sort-by=.lastTimestamp | tail -20
+#   kubectl -n infra describe pod <postgres-pod>
+#   # Look for: "Liveness probe failed" or "connection refused" on probe ports.
+#   # If probes are 127.0.0.1-bound, ztunnel interception causes them to fail.
+#   # In that case try the port-exclusion approach first (probeExcludePorts in
+#   # main values.yaml) before falling back to full dis-enrolment.
+
+namespaces:
+  - name: infra
+    # meshEnroll set to false — ztunnel will not intercept infra namespace traffic.
+    meshEnroll: false
+    podSecurity:
+      enforce: baseline
+      audit: restricted
+      warn: restricted

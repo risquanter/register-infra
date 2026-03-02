@@ -1,0 +1,42 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: require-jwt
+  namespace: register
+spec:
+  # selector: empty applies this policy to all workloads in the namespace
+  selector: {}
+  action: ALLOW
+  rules:
+    - # A request is allowed only when all of the following are true:
+      from:
+        - source:
+            # requestPrincipal is set only when a valid JWT was presented and
+            # validated by the RequestAuthentication policy above.
+            # An empty or missing JWT will have no principal → this rule does
+            # not match → the request is denied (default deny when rules exist).
+            requestPrincipals: ["*"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-forwarded-identity-headers
+  namespace: register
+spec:
+  # Block requests that arrive at the waypoint proxy with a pre-set x-user-id
+  # header from an external source. The header is only trusted when it is
+  # written by the waypoint itself after JWT validation.
+  #
+  # Note: x-user-id stripping is enforced at the EnvoyFilter level (see
+  # infra/k8s/istio/envoy-filter-strip-headers.yaml). This policy is a
+  # defence-in-depth layer for the waypoint path.
+  selector: {}
+  action: DENY
+  rules:
+    - when:
+        - key: request.headers[x-user-id]
+          # Deny any request where x-user-id is already present on ingress.
+          # The waypoint strips this header from external traffic before
+          # applying JWT validation; if it is still present here, it was
+          # injected after stripping or via an untrusted path.
+          notValues: [""]

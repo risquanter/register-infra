@@ -1,0 +1,42 @@
+namespaces:
+  # register — application namespace, enrolled in Istio ambient mesh
+  # Pod Security: restricted (no privilege escalation, no root, read-only root FS)
+  - name: register
+    meshEnroll: true
+    podSecurity:
+      enforce: restricted
+      audit: restricted
+      warn: restricted
+
+  # infra — infrastructure services (PostgreSQL, Keycloak).
+  #
+  # meshEnroll: true — ztunnel intercepts app→postgres and app→keycloak traffic
+  # and wraps it in mTLS (HBONE). No application or chart changes needed:
+  # ambient mode is transparent to the workload.
+  #
+  # TEST after enabling: verify postgres and keycloak pods stay healthy:
+  #   kubectl -n infra get pods -w
+  #   kubectl -n infra get events --sort-by=.lastTimestamp | tail -20
+  #
+  # ROLLBACK if probes trip: either set meshEnroll: false and redeploy, OR
+  # uncomment probeExcludePorts below to exclude specific ports from ztunnel.
+  # A ready-to-use override file exists at:
+  #   infra/helm/namespaces/values-infra-no-mesh.yaml
+  # Apply it with: helm upgrade namespaces ./infra/helm/namespaces -f values-infra-no-mesh.yaml
+  #
+  # Pod Security: baseline (bitnami DB containers need limited capabilities)
+  - name: infra
+    meshEnroll: true
+    podSecurity:
+      enforce: baseline
+      audit: restricted
+      warn: restricted
+    # probeExcludePorts: "5432,8080"   # uncomment if liveness probes fail post-enrolment
+
+  # observability — metrics, tracing, logging
+  - name: observability
+    meshEnroll: false
+    podSecurity:
+      enforce: baseline
+      audit: baseline
+      warn: restricted

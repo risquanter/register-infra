@@ -1,0 +1,55 @@
+# image.tag is written by ArgoCD Image Updater on each new GHCR push.
+# Do not edit image.tag manually — changes will be overwritten.
+image:
+  repository: ghcr.io/<org>/<image>
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Number of application replicas.
+# Single-node cluster: 1 is sufficient. Increase when moving to multi-node.
+replicaCount: 1
+
+# Resource requests and limits.
+# Requests: guaranteed allocation. Limits: hard ceiling.
+# Tune based on observed usage (kubectl top pods -n register).
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Ingress via Istio Gateway — configure host and TLS here.
+ingress:
+  enabled: false
+  host: register.example.com
+  tlsSecretName: register-tls
+
+# Environment variables injected into the application container.
+# Sensitive values should reference a Kubernetes Secret, not be set inline.
+env:
+  - name: DB_HOST
+    value: "postgresql-postgresql.infra.svc.cluster.local"
+  - name: DB_PORT
+    value: "5432"
+  - name: DB_NAME
+    value: "register_app"
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: postgres-credentials
+        key: postgres-password
+  - name: KEYCLOAK_ISSUER
+    value: "http://keycloak.infra.svc.cluster.local/realms/register"
+
+# imagePullSecrets references the GHCR pull secret created during bootstrap.
+imagePullSecrets:
+  - name: ghcr-pull
+
+serviceAccount:
+  name: register-runtime

@@ -1,0 +1,21 @@
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: keycloak-jwt
+  # Applied to the register namespace — all pods in this namespace must
+  # present a valid JWT issued by Keycloak, or the request is rejected.
+  namespace: register
+spec:
+  # selector: empty means this policy applies to all workloads in the namespace
+  selector: {}
+  jwtRules:
+    - # issuer must match the Keycloak realm URL exactly.
+      # Update this when Keycloak's external URL is configured.
+      issuer: "http://keycloak.infra.svc.cluster.local/realms/register"
+      # jwksUri: Istio fetches the public signing keys from this endpoint.
+      # Istio caches and periodically refreshes the JWKS automatically.
+      jwksUri: "http://keycloak.infra.svc.cluster.local/realms/register/protocol/openid-connect/certs"
+      # forwardOriginalToken: passes the raw Authorization header to the app.
+      # The app should treat this as informational only — trust the mesh-propagated
+      # x-user-id header for identity, not the raw JWT payload.
+      forwardOriginalToken: true

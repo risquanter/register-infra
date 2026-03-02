@@ -1,0 +1,6 @@
+apiVersion: v2
+name: register
+description: Helm chart for the register application. Image tag is managed by ArgoCD Image Updater — do not edit image.tag manually.
+type: application
+version: 0.1.0
+appVersion: "0.0.0"  # informational only; actual image tag is in values.yaml

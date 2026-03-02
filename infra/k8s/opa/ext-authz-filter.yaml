@@ -1,0 +1,65 @@
+---
+# EnvoyFilter: wire OPA as an ext_authz gRPC filter on the waypoint.
+#
+# Execution order at the waypoint (left to right):
+#   1. EnvoyFilter: strip-identity-headers   — remove x-user-* from inbound
+#   2. RequestAuthentication: keycloak-jwt   — validate JWT signature/expiry
+#   3. AuthorizationPolicy: require-jwt      — deny if no valid JWT principal
+#   4. THIS FILTER: OPA ext_authz            — coarse role gate (Rego)
+#   5. AuthorizationPolicy: deny-forwarded   — defence-in-depth header deny
+#   → App pod receives request with x-user-id injected from validated JWT
+#   → App calls SpiceDB for instance-level check
+#
+# OPA and SpiceDB use AND logic:
+#   OPA deny  → 403 immediately (SpiceDB never queried, app never reached)
+#   OPA allow → request forwarded; SpiceDB makes the instance-level decision
+#   Both must allow — neither can unilaterally grant access past the other.
+#
+# ADR-012 §3, AUTHORIZATION-PLAN Task L2.4
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: opa-ext-authz
+  namespace: register
+spec:
+  # Target the waypoint proxy for the register namespace.
+  # The waypoint label is set by Istio when istioctl waypoint apply is run.
+  workloadSelector:
+    labels:
+      gateway.istio.io/managed: istio.io-mesh-controller
+
+  configPatches:
+    # Insert the ext_authz HTTP filter into the waypoint's HTTP filter chain.
+    # INSERT_BEFORE http_router ensures OPA runs before the request is forwarded.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_authz
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+            # gRPC call to the opa Service on port 9191.
+            # Timeout is intentionally low: OPA is CPU-bound Rego evaluation,
+            # not a network call. >100ms indicates a misconfiguration or leak.
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|9191||opa.register.svc.cluster.local
+              timeout: 0.1s  # 100ms — OPA should return in <5ms normally
+            # failure_mode_deny: true means OPA unavailability → 403, not allow.
+            # This is the fail-closed posture required by the threat model.
+            failure_mode_deny: true
+            # Include the Authorization header so OPA receives the JWT.
+            with_request_body:
+              max_request_bytes: 8192
+              allow_partial_message: true
+            # Forward HTTP metadata to OPA in the CheckRequest.
+            # OPA policy reads: input.request.http.method, .path, .headers
+            include_peer_certificate: false

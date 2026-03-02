@@ -1,0 +1,35 @@
+#cloud-config
+# Executed on first boot of the Hetzner VM by cloud-init.
+# Installs k3s with all hardening flags set via a config file, not CLI flags.
+# No SSH session required — Terraform drives the entire process.
+
+package_update: true
+packages:
+  - curl
+  - jq
+  - git
+
+write_files:
+  - path: /etc/rancher/k3s/config.yaml
+    owner: root:root
+    permissions: "0600"
+    content: |
+      # Encrypt Kubernetes Secrets at rest in etcd.
+      secrets-encryption: true
+      # Restrict kubeconfig file permissions to owner only.
+      write-kubeconfig-mode: "600"
+      # Traefik is disabled — ingress is managed as an ArgoCD Application.
+      disable:
+        - traefik
+      # Flannel is disabled — Cilium is the CNI, installed by Terraform Helm provider.
+      flannel-backend: "none"
+      # Disable k3s's built-in network policy controller — Cilium handles NetworkPolicy.
+      disable-network-policy: true
+
+runcmd:
+  # Install k3s. /etc/rancher/k3s/config.yaml is read automatically.
+  # Version is injected by Terraform templatefile().
+  - |
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${k3s_version}" sh -
+  # Verify secret encryption is active before Terraform proceeds to install Helm charts.
+  - k3s secrets-encrypt status

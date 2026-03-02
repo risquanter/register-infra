@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: namespaces
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/<org>/register-infra
+    targetRevision: HEAD
+    path: infra/helm/namespaces
+    helm:
+      releaseName: namespaces
+  destination:
+    server: https://kubernetes.default.svc
+    # Namespaces are cluster-scoped; default is used as the release namespace
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Creates the namespace if it doesn't already exist.
+      # Required for the initial sync before any namespaces are present.
+      - CreateNamespace=true

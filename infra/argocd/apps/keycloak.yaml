@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: keycloak
+    targetRevision: "24.4.0"
+    helm:
+      releaseName: keycloak
+      valuesObject:
+        auth:
+          existingSecret: keycloak-credentials
+          passwordSecretKey: admin-password
+        # Use the external PostgreSQL installed above; disable the bundled one.
+        postgresql:
+          enabled: false
+        externalDatabase:
+          host: postgresql-postgresql.infra.svc.cluster.local
+          port: 5432
+          user: bn_keycloak
+          existingSecret: postgres-credentials
+          existingSecretPasswordKey: keycloak-db-password
+          database: keycloak
+        containerSecurityContext:
+          enabled: true
+          runAsNonRoot: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: infra
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,32 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: strip-identity-headers
+  namespace: register
+spec:
+  # Target the waypoint proxy for the register namespace.
+  # The waypoint is the L7 policy enforcement point in ambient mode.
+  workloadSelector:
+    labels:
+      gateway.istio.io/managed: istio.io-mesh-controller
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: MERGE
+        value:
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+            # Strip x-user-* headers on ingress to the waypoint.
+            # These headers are owned by the mesh. External clients must not be
+            # able to forge identity by pre-setting them.
+            # The waypoint re-populates x-user-id from the validated JWT sub claim.
+            request_headers_to_remove:
+              - x-user-id
+              - x-user-email
+              - x-user-roles

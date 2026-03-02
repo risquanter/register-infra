@@ -1,0 +1,44 @@
+name: Terraform Apply
+
+# Apply runs automatically on push to main when terraform files change.
+# This requires branch protection + required PR reviews on main — do not
+# allow direct pushes to main without a review.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/terraform/**"
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    name: terraform apply
+    runs-on: ubuntu-latest
+    # environment: production creates a GitHub environment gate.
+    # Configure required reviewers in Settings → Environments → production.
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+        run: terraform init -input=false
+
+      - name: Terraform Apply
+        working-directory: infra/terraform
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_key_name: ${{ secrets.HCLOUD_SSH_KEY_NAME }}
+          TF_VAR_operator_cidr: ${{ secrets.OPERATOR_CIDR }}
+        run: terraform apply -input=false -auto-approve

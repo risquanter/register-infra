@@ -1,0 +1,6 @@
+creation_rules:
+  # All YAML files under infra/secrets/ are encrypted with the age public key below.
+  # Replace the placeholder with the output of: age-keygen | grep "public key"
+  - path_regex: infra/secrets/.*\.yaml$
+    age: >-
+      age1REPLACE_WITH_YOUR_PUBLIC_KEY

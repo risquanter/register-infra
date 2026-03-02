@@ -1,0 +1,130 @@
+---
+# Default deny-all policy for the register namespace.
+# No pod can receive or initiate traffic unless an explicit allow policy exists.
+# This is the starting point — add targeted allow policies on top of this.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: register
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Allow the register application to reach PostgreSQL in the infra namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-postgres
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: register
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Allow the register application to reach Keycloak in the infra namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-keycloak
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: register
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 80
+---
+# Allow ingress to the register application from the Istio waypoint proxy.
+# The waypoint is what terminates external traffic after the mesh policy checks.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-waypoint
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: register
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: register
+          podSelector:
+            matchLabels:
+              gateway.istio.io/managed: istio.io-mesh-controller
+---
+# Allow the Istio waypoint to call OPA over gRPC (ext_authz).
+# The waypoint is the ext_authz client; OPA is the server on port 9191.
+# Without this rule the default-deny-all policy would block the call and
+# OPA's fail-closed mode would return 403 for every request.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-opa-from-waypoint
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app: opa
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              gateway.istio.io/managed: istio.io-mesh-controller
+      ports:
+        - protocol: TCP
+          port: 9191
+---
+# Allow the waypoint to egress to OPA on port 9191.
+# The waypoint pod is also subject to the default-deny-all egress rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-waypoint-to-opa
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      gateway.istio.io/managed: istio.io-mesh-controller
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: opa
+      ports:
+        - protocol: TCP
+          port: 9191

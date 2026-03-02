@@ -1,0 +1,53 @@
+{{- range .Values.namespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- with .podSecurity }}
+    pod-security.kubernetes.io/enforce: {{ .enforce }}
+    pod-security.kubernetes.io/audit:   {{ .audit }}
+    pod-security.kubernetes.io/warn:    {{ .warn }}
+    {{- end }}
+    {{- if .meshEnroll }}
+    # Enrolling a namespace in Istio ambient mode causes ztunnel (DaemonSet) to
+    # intercept all pod egress and ingress transparently via iptables/eBPF.
+    # Traffic between enrolled pods becomes mTLS (HBONE tunnel) automatically.
+    # No sidecar injection, no chart changes to workloads.
+    istio.io/dataplane-mode: ambient
+    {{- end }}
+{{- end }}
+{{- range .Values.namespaces }}
+{{- if and .meshEnroll .probeExcludePorts }}
+---
+# PodAnnotationDefault — propagates probe-exclusion annotation to all pods
+# created in this namespace via a MutatingWebhookConfiguration or a manual
+# annotation on the StatefulSet/Deployment.
+#
+# NOTE: Kubernetes does not support namespace-level default pod annotations
+# natively. The comment below records the kubectl patch command to apply
+# the annotation to the affected StatefulSet/Deployment directly if probes fail.
+#
+# For PostgreSQL:
+#   kubectl -n {{ .name }} patch statefulset register-postgres-postgresql \
+#     --type=json \
+#     -p='[{"op":"add","path":"/spec/template/metadata/annotations","value":{"traffic.sidecar.istio.io/excludeInboundPorts":"{{ .probeExcludePorts }}"}}]'
+#
+# For Keycloak:
+#   kubectl -n {{ .name }} patch statefulset keycloak \
+#     --type=json \
+#     -p='[{"op":"add","path":"/spec/template/metadata/annotations","value":{"traffic.sidecar.istio.io/excludeInboundPorts":"{{ .probeExcludePorts }}"}}]'
+#
+# Revert by removing the annotation (set probeExcludePorts to empty and redeploy).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .name }}-mesh-probe-exclusion-reminder
+  namespace: {{ .name }}
+  annotations:
+    helm.sh/note: "See template comment — probeExcludePorts={{ .probeExcludePorts }}. Apply kubectl patch above if probes fail."
+data:
+  ports: {{ .probeExcludePorts | quote }}
+{{- end }}
+{{- end }}

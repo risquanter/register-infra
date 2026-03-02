@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: postgresql
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: postgresql
+    targetRevision: "16.4.0"
+    helm:
+      releaseName: postgresql
+      valuesObject:
+        auth:
+          # existingSecret references a Kubernetes Secret that ArgoCD creates
+          # from the SOPS-encrypted file infra/secrets/postgres.enc.yaml.
+          existingSecret: postgres-credentials
+          secretKeys:
+            adminPasswordKey: postgres-password
+        primary:
+          persistence:
+            enabled: true
+            size: 10Gi
+          containerSecurityContext:
+            enabled: true
+            runAsNonRoot: true
+        # Disable the bundled PgBouncer — not needed at this scale.
+        pgbouncer:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: infra
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

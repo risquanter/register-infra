@@ -1,0 +1,5 @@
+apiVersion: v2
+name: namespaces
+description: Declares cluster namespaces with Pod Security admission labels and Istio ambient mesh enrollment. Managed by ArgoCD — do not apply manually.
+type: application
+version: 0.1.0

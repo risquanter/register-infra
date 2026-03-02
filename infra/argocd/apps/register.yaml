@@ -1,0 +1,45 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: register
+  namespace: argocd
+  annotations:
+    # ── ArgoCD Image Updater configuration ──────────────────────────────────
+    # Image Updater polls GHCR for new digests matching the main branch.
+    # Replace <org>/<image> with the actual GHCR path.
+    argocd-image-updater.argoproj.io/image-list: "app=ghcr.io/<org>/<image>"
+
+    # digest strategy: tracks the exact image digest, not a mutable tag.
+    # This prevents silent rollbacks when a mutable tag (e.g. latest) is reused.
+    argocd-image-updater.argoproj.io/app.update-strategy: digest
+
+    # Helm value paths that Image Updater writes the updated repository + tag into.
+    argocd-image-updater.argoproj.io/app.helm.image-name: image.repository
+    argocd-image-updater.argoproj.io/app.helm.image-tag: image.tag
+
+    # write-back-method=git: Image Updater commits the new tag to the infra repo.
+    # This keeps git as the single source of truth and creates an audit trail
+    # of every image deployed. The commit appears in git history.
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/git-branch: main
+
+    # GHCR credentials for Image Updater to poll the private registry.
+    # References the ghcr-image-updater Secret created during bootstrap §4.
+    argocd-image-updater.argoproj.io/app.pull-secret: "secret:argocd/ghcr-image-updater#password"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/<org>/register-infra
+    targetRevision: HEAD
+    path: infra/helm/register
+    helm:
+      releaseName: register
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: register
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

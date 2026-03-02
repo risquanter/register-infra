@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  # The cascade finalizer ensures that deleting this Application also deletes
+  # all child Applications it manages. Remove this finalizer if you want to
+  # decommission the cluster without cascade-deleting running workloads.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/<org>/register-infra
+    targetRevision: HEAD
+    # ArgoCD watches this directory for Application manifests.
+    # Adding a new Application means adding a YAML file here and pushing.
+    path: infra/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true      # remove resources that are no longer in git
+      selfHeal: true   # revert any manual in-cluster changes

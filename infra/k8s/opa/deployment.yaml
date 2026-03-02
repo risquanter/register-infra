@@ -1,0 +1,146 @@
+---
+# OPA ConfigMap — loads the policy from the Rego source files.
+# In production you would use a bundle server (HTTP/S pull) for live policy
+# updates without pod restarts. This ConfigMap approach works for dev/single-node
+# and is simpler to reason about: policy change = ConfigMap update + pod rollout.
+#
+# To use a bundle server instead:
+#   1. Run `opa build infra/opa/policies/ -o bundle.tar.gz`
+#   2. Serve the bundle from an S3-compatible bucket or nginx
+#   3. Replace the volume mount below with an opa.yaml config pointing to
+#      the bundle URL (see https://www.openpolicyagent.org/docs/latest/management-bundles/)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opa-policy
+  namespace: register
+data:
+  # Content is read from the Rego file at chart render time via ArgoCD directory
+  # sync. In this stub the policy is embedded inline. Replace with a Helm
+  # file reference or ConfigMap generator if the policy grows large.
+  allow.rego: |
+    # See infra/opa/policies/allow.rego for the canonical source.
+    # This ConfigMap is kept in sync by ArgoCD.
+    package register.authz
+    import future.keywords.if
+    import future.keywords.every
+    import future.keywords.in
+    default allow := false
+    allow if { input.parsed_path == ["health"] }
+    recognized_roles := {"analyst", "editor", "team_admin"}
+    user_roles := roles if {
+        roles := {r | some r; r = input.parsed_jwt.payload.realm_access.roles[_]}
+    } else := set()
+    allow if { some role in user_roles; role in recognized_roles }
+    deny if {
+        input.request.http.method in {"POST","PUT","PATCH","DELETE"}
+        every role in user_roles { role == "viewer" }
+    }
+    deny if {
+        input.parsed_path[0] == "risk-trees"
+        input.parsed_path[2] == "cache"
+        not "team_admin" in user_roles
+    }
+    deny if {
+        input.parsed_path == ["cache","clear-all"]
+        not "team_admin" in user_roles
+    }
+---
+# OPA Deployment — runs with the envoy_ext_authz_grpc plugin enabled.
+# The waypoint calls OPA over gRPC on port 9191 before forwarding the request
+# to the application. OPA evaluates allow.rego and returns Allow or Deny.
+#
+# Security: OPA does not need any Kubernetes permissions. It reads policy from
+# a mounted ConfigMap and JWT from the ext_authz CheckRequest. No RBAC required.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opa
+  namespace: register
+  labels:
+    app: opa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opa
+  template:
+    metadata:
+      labels:
+        app: opa
+    spec:
+      # Pod Security — restricted profile (same as rest of register namespace)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opa
+          # Pin to a specific OPA version — never use :latest in production.
+          # Check https://github.com/open-policy-agent/opa/releases for latest.
+          image: openpolicyagent/opa:0.70.0-envoy
+          args:
+            - run
+            - --server
+            - --addr=localhost:8181           # REST API (internal only)
+            - --diagnostic-addr=0.0.0.0:8282  # health/metrics (probes)
+            - --set=plugins.envoy_ext_authz_grpc.addr=:9191
+            - --set=plugins.envoy_ext_authz_grpc.path=register/authz/allow
+            - --set=decision_logs.console=true  # log every decision to stdout
+            - /policies/allow.rego
+          ports:
+            - name: grpc-authz
+              containerPort: 9191
+              protocol: TCP
+            - name: http-diag
+              containerPort: 8282
+              protocol: TCP
+          volumeMounts:
+            - name: policy
+              mountPath: /policies
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http-diag
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health?bundle=true
+              port: http-diag
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: policy
+          configMap:
+            name: opa-policy
+---
+# OPA Service — the waypoint reaches OPA over gRPC on port 9191.
+# ClusterIP is sufficient: only the waypoint (in the same namespace) calls this.
+apiVersion: v1
+kind: Service
+metadata:
+  name: opa
+  namespace: register
+spec:
+  selector:
+    app: opa
+  ports:
+    - name: grpc-authz
+      port: 9191
+      targetPort: grpc-authz
+      protocol: TCP
