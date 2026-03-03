@@ -247,8 +247,17 @@ resource "helm_release" "cert_manager" {
 # After ArgoCD is running, all further cluster state is declared in git and
 # applied by ArgoCD — Terraform does not manage application-level resources.
 #
-# server.insecure = true: TLS terminates at the ingress/gateway layer,
-# not at the ArgoCD server process. ArgoCD listens plain HTTP inside the cluster.
+# server.insecure = true: ArgoCD's own TLS listener is disabled. Ztunnel
+# provides mTLS between ArgoCD pods once the namespace is enrolled in the
+# mesh (a required post-bootstrap step — see docs). Access from the operator
+# is via kubectl port-forward, which uses the k8s API server's own TLS.
+#
+# IMPORTANT: helm install creates the argocd namespace WITHOUT the Istio
+# ambient label. Two-part fix:
+#   1. Post-bootstrap: kubectl label namespace argocd istio.io/dataplane-mode=ambient
+#      (closes the ~60s window before ArgoCD syncs the namespace chart)
+#   2. infra/helm/namespaces/values.yaml declares argocd with meshEnroll: true
+#      (ArgoCD self-heal maintains the label — drift-proof under GitOps)
 resource "helm_release" "argocd" {
   depends_on       = [helm_release.cert_manager]
   name             = "argocd"

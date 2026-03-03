@@ -1,14 +1,10 @@
 name: Terraform Apply
 
-# Apply runs automatically on push to main when terraform files change.
-# This requires branch protection + required PR reviews on main — do not
-# allow direct pushes to main without a review.
+# TEMPORARILY DISABLED — no Hetzner account yet.
+# Restore push trigger when cloud provisioning is needed.
+# Original trigger: push to main on infra/terraform/**
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "infra/terraform/**"
+  workflow_dispatch:
 
 permissions:
   contents: read

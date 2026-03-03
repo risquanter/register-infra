@@ -1,4 +1,31 @@
 namespaces:
+  # argocd — GitOps controller namespace.
+  #
+  # ArgoCD is a high-value target: it holds the SOPS age private key,
+  # GitHub PAT, and its repo-server executes arbitrary code (Helm template
+  # rendering, Kustomize, plugins). The application-controller has
+  # cluster-wide RBAC. Leaving it outside the mesh is an unacceptable gap.
+  #
+  # meshEnroll: true — ztunnel wraps all ArgoCD internal pod-to-pod traffic
+  # (server ↔ repo-server ↔ controller) in mTLS. This is the PERSISTENT
+  # half of the fix. The namespace chart applies this label declaratively;
+  # ArgoCD self-heal prevents drift.
+  #
+  # BOOTSTRAP TIMING: the argocd namespace is created by helm install
+  # --create-namespace BEFORE ArgoCD or this chart exists. Between install
+  # and the first namespace chart sync (~60 s), the namespace has no ambient
+  # label. The bootstrap docs include a kubectl label command to close that
+  # window. Once this chart syncs, the label is under GitOps governance.
+  #
+  # Pod Security: baseline — ArgoCD containers need some capabilities that
+  # restricted prohibits (e.g. repo-server may exec git).
+  - name: argocd
+    meshEnroll: true
+    podSecurity:
+      enforce: baseline
+      audit: restricted
+      warn: restricted
+
   # register — application namespace, enrolled in Istio ambient mesh
   # Pod Security: restricted (no privilege escalation, no root, read-only root FS)
   - name: register

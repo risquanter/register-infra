@@ -1,11 +1,10 @@
 name: Terraform Plan
 
-# Run a plan on every pull request that touches infra/terraform/.
-# The plan output is posted as a PR comment for review before apply.
+# TEMPORARILY DISABLED — no Hetzner account yet.
+# Restore pull_request trigger when cloud provisioning is needed.
+# Original trigger: pull_request on infra/terraform/**
 on:
-  pull_request:
-    paths:
-      - "infra/terraform/**"
+  workflow_dispatch:
 
 permissions:
   contents: read

@@ -17,8 +17,11 @@
 # Security implication of using this file:
 #   app → postgres  : plain TCP (no ztunnel mTLS)
 #   app → keycloak  : plain TCP (no ztunnel mTLS)
-# This is acceptable on a single node where traffic does not cross a physical
-# wire. On a multi-node cluster, re-enabling mesh enrolment is strongly advised.
+# This is an ACCEPTED RISK caused by a technical limitation in ztunnel's
+# transparent L4 interception with non-HTTP protocols (PostgreSQL's binary
+# wire protocol). It is NOT a design choice. Track this as a gap to close
+# when Istio ambient mode improves non-HTTP protocol handling.
+# On a multi-node cluster, this risk is higher — plaintext crosses a network.
 #
 # Root cause diagnosis before falling back:
 #   kubectl -n infra get events --sort-by=.lastTimestamp | tail -20

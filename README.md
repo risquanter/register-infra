@@ -20,9 +20,15 @@ Infrastructure as Code and GitOps configuration for the **register** platform.
 - Application source code → [`register`](https://github.com/<org>/register)
 - Container image builds → GitHub Actions in the app repo
 
-## Prerequisites
+## Getting started
 
-See [docs/K3S-GITOPS-BOOTSTRAP.md](docs/K3S-GITOPS-BOOTSTRAP.md) for the full provisioning walkthrough.
+| Path | Guide | Prerequisite |
+|---|---|---|
+| **Local development** (start here) | [docs/LOCAL-K3D-BOOTSTRAP.md](docs/LOCAL-K3D-BOOTSTRAP.md) | Fresh Debian + Docker |
+| Production deploy (Hetzner Cloud) | [docs/K3S-GITOPS-BOOTSTRAP.md](docs/K3S-GITOPS-BOOTSTRAP.md) | Hetzner account + Terraform |
+| Learning / reference | [docs/K3S-MANUAL-INSTALL.md](docs/K3S-MANUAL-INSTALL.md) | — |
+| Validation / CI | [docs/K8S-TESTING.md](docs/K8S-TESTING.md) | Running cluster |
+| Security architecture | [docs/SECURITY-FLOW.md](docs/SECURITY-FLOW.md) | — |
 
 Quick-reference tool versions:
 
@@ -34,7 +40,24 @@ Quick-reference tool versions:
 | SOPS | 3.x |
 | age | 1.x |
 
-## Bootstrap (new cluster)
+## Bootstrap — local development (recommended starting point)
+
+```bash
+# see docs/LOCAL-K3D-BOOTSTRAP.md for the full walkthrough
+k3d cluster create register-dev \
+  --k3s-arg "--flannel-backend=none@server:0" \
+  --k3s-arg "--disable-network-policy@server:0" \
+  --k3s-arg "--disable=traefik@server:0" \
+  --k3s-arg "--disable=servicelb@server:0" \
+  --port "8443:443@loadbalancer" \
+  --port "8080:80@loadbalancer"
+
+# then follow LOCAL-K3D-BOOTSTRAP.md §2–§8:
+#   install Cilium → Istio → cert-manager → ArgoCD → create secrets → connect repo
+#   → apply root App-of-Apps → ArgoCD manages everything from git
+```
+
+## Bootstrap — Hetzner Cloud (production)
 
 ```bash
 # 1. provision VM + install cluster platform components
