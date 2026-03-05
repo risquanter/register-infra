@@ -30,7 +30,7 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: infra
-        - podSelector:
+          podSelector:
             matchLabels:
               app.kubernetes.io/name: postgresql
       ports:
@@ -54,12 +54,14 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: infra
-        - podSelector:
+          podSelector:
             matchLabels:
               app.kubernetes.io/name: keycloak
       ports:
         - protocol: TCP
           port: 80
+        - protocol: TCP
+          port: 8080
 ---
 # Allow ingress to the register application from the Istio waypoint proxy.
 # The waypoint is what terminates external traffic after the mesh policy checks.
@@ -128,3 +130,47 @@ spec:
       ports:
         - protocol: TCP
           port: 9191
+---
+# Allow the waypoint to forward approved requests to the register app.
+# After JWT validation and OPA ext_authz pass, the waypoint proxies the
+# request to the application pod on port 8080. Without this rule, the
+# default-deny blocks the final hop and the app never receives traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-waypoint-to-register
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      gateway.istio.io/managed: istio.io-mesh-controller
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: register
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow DNS egress for all register pods (app, OPA, waypoint).
+# Required for Kubernetes service discovery (e.g., resolving
+# postgresql-postgresql.infra.svc.cluster.local).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: register
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

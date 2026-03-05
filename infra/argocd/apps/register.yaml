@@ -27,7 +27,7 @@ metadata:
     # References the ghcr-image-updater Secret created during bootstrap §4.
     argocd-image-updater.argoproj.io/app.pull-secret: "secret:argocd/ghcr-image-updater#password"
 spec:
-  project: default
+  project: app
   source:
     repoURL: https://github.com/<org>/register-infra
     targetRevision: HEAD

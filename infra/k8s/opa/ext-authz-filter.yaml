@@ -3,10 +3,9 @@
 #
 # Execution order at the waypoint (left to right):
 #   1. EnvoyFilter: strip-identity-headers   — remove x-user-* from inbound
-#   2. RequestAuthentication: keycloak-jwt   — validate JWT signature/expiry
+#   2. RequestAuthentication: keycloak-jwt   — validate JWT, inject x-user-*
 #   3. AuthorizationPolicy: require-jwt      — deny if no valid JWT principal
 #   4. THIS FILTER: OPA ext_authz            — coarse role gate (Rego)
-#   5. AuthorizationPolicy: deny-forwarded   — defence-in-depth header deny
 #   → App pod receives request with x-user-id injected from validated JWT
 #   → App calls SpiceDB for instance-level check
 #

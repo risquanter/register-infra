@@ -4,14 +4,16 @@ metadata:
   name: mesh-policy
   namespace: argocd
 spec:
-  project: default
+  project: platform
   source:
     repoURL: https://github.com/<org>/register-infra
     targetRevision: HEAD
     # Deploys all raw Kubernetes manifests under infra/k8s/:
-    #   istio/         — RequestAuthentication, AuthorizationPolicy, EnvoyFilters
-    #   opa/           — OPA Deployment, Service, ConfigMap, ext_authz EnvoyFilter
-    #   network-policy/ — Cilium NetworkPolicy rules
+    #   istio/          — RequestAuthentication, AuthorizationPolicy, EnvoyFilters,
+    #                     PeerAuthentication (register + argocd namespaces)
+    #   opa/            — ext_authz EnvoyFilter (wires waypoint → OPA gRPC)
+    #   network-policy/ — NetworkPolicy rules (register + infra namespaces)
+    #   rbac/           — Role definitions (viewer, deployer, ci-authz)
     # Uses a directory glob so adding a new manifest file is sufficient —
     # no chart or Application changes needed.
     path: infra/k8s

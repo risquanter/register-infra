@@ -1,0 +1,23 @@
+{{- range .Values.namespaces }}
+{{- if .limitRange }}
+---
+# LimitRange — sets default resource requests/limits for pods that don't
+# declare them. Prevents a pod without resource specs from consuming
+# unbounded node resources. Does NOT cap the total namespace usage
+# (that requires ResourceQuota — see TODO in K3S-GITOPS-BOOTSTRAP.md).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-limits
+  namespace: {{ .name }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: {{ .limitRange.defaultCpu }}
+        memory: {{ .limitRange.defaultMemory }}
+      defaultRequest:
+        cpu: {{ .limitRange.defaultRequestCpu }}
+        memory: {{ .limitRange.defaultRequestMemory }}
+{{- end }}
+{{- end }}

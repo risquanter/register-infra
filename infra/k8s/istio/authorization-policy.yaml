@@ -8,7 +8,7 @@ spec:
   selector: {}
   action: ALLOW
   rules:
-    - # A request is allowed only when all of the following are true:
+    - # Authenticated routes: require a valid JWT (any principal).
       from:
         - source:
             # requestPrincipal is set only when a valid JWT was presented and
@@ -16,27 +16,43 @@ spec:
             # An empty or missing JWT will have no principal → this rule does
             # not match → the request is denied (default deny when rules exist).
             requestPrincipals: ["*"]
----
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: deny-forwarded-identity-headers
-  namespace: register
-spec:
-  # Block requests that arrive at the waypoint proxy with a pre-set x-user-id
-  # header from an external source. The header is only trusted when it is
-  # written by the waypoint itself after JWT validation.
-  #
-  # Note: x-user-id stripping is enforced at the EnvoyFilter level (see
-  # infra/k8s/istio/envoy-filter-strip-headers.yaml). This policy is a
-  # defence-in-depth layer for the waypoint path.
-  selector: {}
-  action: DENY
-  rules:
-    - when:
-        - key: request.headers[x-user-id]
-          # Deny any request where x-user-id is already present on ingress.
-          # The waypoint strips this header from external traffic before
-          # applying JWT validation; if it is still present here, it was
-          # injected after stripping or via an untrusted path.
-          notValues: [""]
+    - # Public routes: no JWT required.
+      # These paths are accessible without authentication — the capability URL
+      # or the endpoint's nature (health probe) is the sole credential.
+      # ADR-021 (capability URLs), AUTHORIZATION-PLAN L1.5 route matrix.
+      to:
+        - operation:
+            paths:
+              - "/w/*"                # Layer 0 capability routes (ADR-021)
+              - "/workspaces/*"       # workspace bootstrap — pre-resource (route matrix row 3)
+              - "/health"             # always public (route matrix row 1)
+
+# ── REMOVED: deny-forwarded-identity-headers ─────────────────────────────────
+#
+# A DENY AuthorizationPolicy that checked request.headers[x-user-id] was here
+# previously. It was intended as defence-in-depth: block requests where x-user-id
+# was pre-set by an external client.
+#
+# WHY IT WAS REMOVED: Envoy evaluates filters in this order:
+#   1. HttpConnectionManager request_headers_to_remove  → strips x-user-id  ✅
+#   2. jwt_authn (RequestAuthentication) → validates JWT, then
+#      outputClaimToHeaders RE-ADDS x-user-id from the JWT sub claim
+#   3. rbac (AuthorizationPolicy) → evaluates DENY policies first
+#
+# At step 3, x-user-id IS present (legitimately, from step 2). The DENY policy
+# matched every authenticated request, returning 403 for all valid traffic.
+# Public routes (no JWT → no outputClaimToHeaders → no x-user-id) were
+# unaffected, making the bug hard to spot without end-to-end testing.
+#
+# HEADER STRIPPING IS STILL ENFORCED by the EnvoyFilter at
+# infra/k8s/istio/envoy-filter-strip-headers.yaml. The EnvoyFilter operates at
+# the HttpConnectionManager level (step 1), which runs before any HTTP filter.
+# There is no known mechanism to bypass it in Envoy's architecture.
+#
+# Remaining defence-in-depth layers:
+#   - EnvoyFilter strips external x-user-* headers           (L7 - waypoint)
+#   - RequestAuthentication validates JWT, adds trusted headers (L7 - waypoint)
+#   - PeerAuthentication STRICT rejects non-mesh traffic        (L4 - ztunnel)
+#   - NetworkPolicy restricts ingress to app pods from waypoint (L3 - Cilium)
+#
+# See ADR-012 §5-§6, THREAT-CATALOG T3 (header forgery).

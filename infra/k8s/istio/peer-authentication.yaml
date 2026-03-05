@@ -1,0 +1,42 @@
+---
+# PeerAuthentication — enforce STRICT mTLS for the register namespace.
+# Without this, a non-meshed pod could connect to meshed pods using plaintext,
+# bypassing the waypoint and all L7 security controls.
+#
+# This is the mTLS half of THREAT-CATALOG T1 (mesh bypass prevention).
+# The other half is NetworkPolicy (only waypoint can reach app pods).
+#
+# STRICT mode means:
+#   - All incoming connections MUST present a valid mesh certificate (SPIFFE)
+#   - Plaintext TCP connections are rejected at the ztunnel level
+#   - Pods not enrolled in the mesh cannot reach pods in this namespace
+#
+# Currently applied per-namespace (register, argocd). Mesh-wide STRICT
+# (istio-system) is deferred until all namespaces are enrolled and tested —
+# specifically, the infra namespace (PostgreSQL/Keycloak) needs verification
+# that ztunnel + PeerAuthentication STRICT doesn't break liveness probes.
+#
+# TODO: Promote to mesh-wide STRICT in istio-system when:
+#   1. The infra namespace has been verified with STRICT PeerAuthentication
+#      (PostgreSQL and Keycloak probes survive ztunnel + mTLS interception)
+#   2. The observability namespace is enrolled in the mesh (meshEnroll: true)
+#   3. Any future namespaces (e.g., SpiceDB) are enrolled and tested
+#   At that point, replace these per-namespace resources with a single
+#   PeerAuthentication in istio-system with mode: STRICT.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: strict-mtls
+  namespace: register
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: strict-mtls
+  namespace: argocd
+spec:
+  mtls:
+    mode: STRICT

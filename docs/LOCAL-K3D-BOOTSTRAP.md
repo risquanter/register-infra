@@ -9,9 +9,10 @@ to the Hetzner production path, but runs entirely on your machine.
 - **Security posture**: defence-in-depth from the start — even on localhost
 
 > **New to Kubernetes?** This guide explains every concept as it comes up.
-> Skim the [Glossary](#glossary) and [Tooling overview](#tooling-overview) at
-> the end of this document before starting — you do not need to memorise
-> anything, but having seen the terms once makes the rest easier to follow.
+> Skim the [Glossary](GITOPS-OPERATIONS.md#glossary) and
+> [Tooling overview](GITOPS-OPERATIONS.md#tooling-overview) in the shared
+> operations reference before starting — you do not need to memorise anything,
+> but having seen the terms once makes the rest easier to follow.
 
 ---
 
@@ -21,6 +22,7 @@ to the Hetzner production path, but runs entirely on your machine.
 |---|---|---|
 | **This guide** | Local dev cluster on your machine | Now — first step |
 | [K3S-GITOPS-BOOTSTRAP.md](K3S-GITOPS-BOOTSTRAP.md) | Production deploy to Hetzner Cloud via Terraform | After local validation works |
+| [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Shared GitOps reference (ArgoCD apps, workflow, glossary) | After bootstrap completes |
 | [K3S-MANUAL-INSTALL.md](K3S-MANUAL-INSTALL.md) | Educational — every command explained imperatively | Reference / learning |
 | [K8S-TESTING.md](K8S-TESTING.md) | Validation and CI pipeline | After cluster is running |
 | [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture | Reference during auth testing |
@@ -474,9 +476,32 @@ kubectl -n cert-manager rollout status deploy/cert-manager --timeout=180s
 > modeling perspective, leaving a component with this attack surface outside
 > the mesh is not acceptable — regardless of single-node vs. multi-node.
 > The threat model is not "who can sniff the physical wire" but "what
-> happens if a pod is compromised." A compromised `repo-server` sitting
-> on plaintext pod traffic can observe controller ↔ server communication
-> with no mesh-level policy enforcement to limit blast radius.
+> happens if a pod is compromised." A supply-chain attack (poisoned Helm
+> chart, malicious git hook, RCE in a config plugin) gives an attacker a
+> shell inside `repo-server`. Without the mesh, all three components talk
+> over the pod network in plaintext. From inside `repo-server`, the attacker
+> can:
+>
+> - **Sniff controller traffic** — `application-controller` continuously
+>   sends sync status and resource manifests to `argocd-server`. Plaintext
+>   means the attacker reads every resource being applied to the cluster,
+>   including Secrets that flow through sync.
+> - **Impersonate the controller** — without mTLS there are no cryptographic
+>   identities. The attacker can send forged gRPC messages to `argocd-server`
+>   (e.g. "mark this app as Synced" or "trigger a sync of a different app").
+> - **Harvest tokens** — `argocd-server` exchanges ServiceAccount tokens and
+>   session credentials over these internal connections. Plaintext means those
+>   are readable.
+>
+> With the mesh enrolled (`kubectl label namespace argocd istio.io/dataplane-mode=ambient`):
+>
+> - Every pod gets a SPIFFE certificate. The controller and server mutually
+>   authenticate before any byte is exchanged.
+> - Even if `repo-server` is fully compromised, it cannot impersonate the
+>   controller — it does not have the controller's private key.
+> - mTLS + mesh policy limits what a compromised `repo-server` can reach,
+>   reducing blast radius from "own the whole cluster" to "own
+>   `repo-server`'s own ServiceAccount permissions."
 >
 > **The fix has two parts:**
 >
@@ -525,7 +550,8 @@ helm upgrade --install argocd argo/argo-cd \
 # - argocd-application-controller: watches for changes and syncs
 kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
 kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=180s
-kubectl -n argocd rollout status deploy/argocd-application-controller --timeout=180s
+# application-controller is a StatefulSet since ArgoCD v2.8
+kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
 ```
 
 ```bash
@@ -734,11 +760,15 @@ ArgoCD will now discover and deploy these Applications automatically:
 
 | ArgoCD Application | What it deploys | Source location |
 |---|---|---|
-| `namespaces` | `argocd`, `register`, `infra`, `observability` namespaces with Pod Security labels and mesh enrollment | `infra/helm/namespaces/` |
+| `namespaces` | `argocd`, `register`, `infra`, `observability` namespaces with Pod Security labels, mesh enrollment, and LimitRanges | `infra/helm/namespaces/` |
 | `postgresql` | PostgreSQL database in `infra` namespace | Bitnami Helm chart (remote) |
 | `keycloak` | Keycloak identity provider in `infra` namespace | Bitnami Helm chart (remote) |
-| `mesh-policy` | Istio JWT/auth policies, OPA role gating, Cilium NetworkPolicies | `infra/k8s/` (raw YAML) |
+| `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
+| `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
 | `register` | Application Deployment in `register` namespace | `infra/helm/register/` |
+
+> For the detailed reference (AppProject scoping, security policies, repo
+> layout), see [GITOPS-OPERATIONS.md — What ArgoCD manages](GITOPS-OPERATIONS.md#what-argocd-manages).
 
 ### 8.1 Watch the sync
 
@@ -995,56 +1025,13 @@ istioctl proxy-status
 
 ## 12) The GitOps workflow — making changes
 
-> **This is how you work day-to-day.** After step 8, every change to the
-> cluster is made by editing files in this repository and pushing to git.
-> ArgoCD polls git every ~3 minutes (configurable) and applies any changes.
->
-> **GitOps best practices:**
-> - **Never `kubectl apply` or `helm install` manually** for GitOps-managed
->   resources. ArgoCD will detect the "drift" (cluster differs from git) and
->   revert your change.
-> - **Use branches and PRs** for changes. This gives you review, CI checks
->   (see [K8S-TESTING.md](K8S-TESTING.md)), and a git-based audit trail.
-> - **Commit small, focused changes**. One policy change per commit, not a
->   bundle of unrelated edits. This makes rollback easier (`git revert`).
-> - **Enable branch protection** on `main`: require PR reviews, require CI
->   to pass. This prevents accidental pushes to the branch ArgoCD watches.
+The day-to-day GitOps workflow (editing files, committing, previewing changes)
+is documented in [GITOPS-OPERATIONS.md — Making changes](GITOPS-OPERATIONS.md#making-changes--the-gitops-workflow).
+The workflow is identical regardless of whether the cluster is local or
+production.
 
-### Example: edit an Istio policy
-
-```bash
-$EDITOR infra/k8s/istio/authorization-policy.yaml
-
-git add infra/k8s/istio/authorization-policy.yaml
-git commit -m "security: tighten authorization policy"
-git push
-
-# ArgoCD detects the change within ~3 minutes.
-# Watch in the UI at http://localhost:9090 or via CLI:
-argocd app get mesh-policy
-```
-
-### Example: change an application Helm value
-
-```bash
-$EDITOR infra/helm/register/values.yaml
-
-git add infra/helm/register/values.yaml
-git commit -m "feat: increase replica count"
-git push
-
-argocd app get register
-```
-
-### Example: preview what ArgoCD would change (dry-run)
-
-```bash
-# WHAT: "argocd app diff" compares the local files to what is deployed in the
-# cluster. The output is like "git diff" but for Kubernetes resources.
-# This is the GitOps equivalent of "terraform plan".
-argocd app diff register --local infra/helm/register/
-argocd app diff mesh-policy --local infra/k8s/
-```
+The automated deploy loop (CI → GHCR → Image Updater → ArgoCD) is also
+described there at [The automated deploy loop](GITOPS-OPERATIONS.md#the-automated-deploy-loop).
 
 ---
 
@@ -1133,58 +1120,15 @@ Security labels. Those are the security controls that matter for the application
 
 ## Troubleshooting
 
+> For shared issues (ArgoCD sync, database crashes, health checks), see
+> [GITOPS-OPERATIONS.md — Troubleshooting](GITOPS-OPERATIONS.md#troubleshooting).
+> The sections below cover k3d-specific issues only.
+
 ### Node stays NotReady after Cilium install
 
 ```bash
 cilium status
 kubectl -n kube-system logs -l k8s-app=cilium --tail=50
-```
-
-### ArgoCD Application stuck at OutOfSync
-
-```bash
-# force a sync and check for errors
-argocd app sync <app-name>
-argocd app get <app-name>
-kubectl -n <namespace> get events --sort-by=.lastTimestamp | tail -20
-```
-
-### PostgreSQL or Keycloak pods crash after mesh enrollment
-
-> **Known technical limitation.** The `infra` namespace is enrolled in the
-> mesh (`meshEnroll: true` in `infra/helm/namespaces/values.yaml`). Ztunnel
-> intercepts all L4 traffic, including kubelet liveness probes. PostgreSQL
-> uses a custom binary wire protocol (not HTTP). When the kubelet probes
-> port 5432 through ztunnel's HBONE tunnel, some PostgreSQL images fail the
-> health check because the probe traffic arrives wrapped in a way the server
-> doesn't expect.
->
-> **This is a ztunnel/non-HTTP-protocol limitation, not a design choice.**
-> Diagnose, mitigate, and if necessary fall back — but track it as a gap.
-
-```bash
-# DIAGNOSE: check what actually failed.
-kubectl -n infra get events --sort-by=.lastTimestamp | tail -20
-kubectl -n infra describe pod <postgres-pod>
-# Look for: "Liveness probe failed" or "connection refused" on probe ports.
-
-# MITIGATION 1: exclude probe ports from ztunnel interception.
-# Edit infra/helm/namespaces/values.yaml — uncomment probeExcludePorts.
-# Then apply the annotation to the StatefulSet:
-kubectl -n infra patch statefulset register-postgres-postgresql \
-  --type=json \
-  -p='[{"op":"add","path":"/spec/template/metadata/annotations","value":{"traffic.sidecar.istio.io/excludeInboundPorts":"5432"}}]'
-
-# MITIGATION 2 (full rollback): remove the infra namespace from the mesh.
-# This means app→postgres and app→keycloak traffic becomes plaintext TCP.
-# State this clearly as an accepted risk — the reason is a technical
-# limitation in ztunnel's non-HTTP protocol handling, not because infra
-# "doesn't need encryption".
-kubectl label namespace infra istio.io/dataplane-mode- --overwrite
-# Or use the dedicated rollback values file:
-# helm upgrade namespaces ./infra/helm/namespaces \
-#   -f infra/helm/namespaces/values.yaml \
-#   -f infra/helm/namespaces/values-infra-no-mesh.yaml
 ```
 
 ### Cannot reach app via localhost:8080
@@ -1196,102 +1140,17 @@ kubectl -n register get pods                  # pod running?
 kubectl -n register describe pod <pod-name>   # detailed pod status
 ```
 
-### Quick health check
-
-```bash
-kubectl get nodes
-kubectl get ns --show-labels
-kubectl -n kube-system get pods         # Cilium
-kubectl -n istio-system get pods        # Istio
-kubectl -n cert-manager get pods        # cert-manager
-kubectl -n argocd get pods              # ArgoCD
-kubectl -n infra get pods               # PostgreSQL, Keycloak
-kubectl -n register get pods            # application + OPA
-kubectl -n register get gateway         # waypoint
-```
-
 ---
 
-## Glossary
+## Glossary, tooling overview, and detailed reference
 
-A reference for terms used in this guide. Skim before starting; revisit as
-needed.
+The full glossary (Kubernetes concepts, networking, authentication, GitOps),
+tooling overview, and repository layout are in the shared operations reference:
 
-### Core Kubernetes concepts
+- [GITOPS-OPERATIONS.md — Glossary](GITOPS-OPERATIONS.md#glossary)
+- [GITOPS-OPERATIONS.md — Tooling overview](GITOPS-OPERATIONS.md#tooling-overview)
+- [GITOPS-OPERATIONS.md — Repository layout](GITOPS-OPERATIONS.md#repository-layout)
 
-| Term | Definition |
-|---|---|
-| **Cluster** | A set of machines (nodes) running Kubernetes. In k3d, a cluster is a set of Docker containers. |
-| **Node** | A single machine in a cluster. Runs pods. In k3d, each node is a Docker container. |
-| **Pod** | The smallest deployable unit in Kubernetes. One or more containers that share networking and storage. Most pods have one container. |
-| **Container** | A lightweight, isolated process running from a Docker/OCI image. |
-| **Namespace** | A logical partition inside a cluster. Think of it as a folder — pods in different namespaces are isolated by default. |
-| **Deployment** | Declares "run N copies of this pod". Kubernetes ensures the actual count matches the declared count. |
-| **StatefulSet** | Like a Deployment, but for databases: pods get stable names and persistent storage. PostgreSQL and Keycloak use this. |
-| **DaemonSet** | Runs one copy of a pod on every node. Used by Cilium and Istio's ztunnel. |
-| **Service** | A stable DNS name + IP that routes traffic to pods. Pods come and go; Services provide a stable address. |
-| **Secret** | A Kubernetes resource for sensitive data (passwords, tokens). Optionally encrypted at rest. |
-| **ConfigMap** | Like a Secret, but for non-sensitive configuration. |
-| **CRD** | Custom Resource Definition — extends the Kubernetes API with new resource types (e.g. `Gateway`, `Certificate`). |
-| **kubeconfig** | A file that tells kubectl how to connect to a cluster (server address, credentials). k3d creates this automatically. |
-| **RBAC** | Role-Based Access Control — Kubernetes' permission system. Who can do what, in which namespace. |
-
-### Networking and security
-
-| Term | Definition |
-|---|---|
-| **CNI** | Container Network Interface — the plugin providing pod networking. Without it, pods cannot communicate. Cilium is our CNI. |
-| **eBPF** | Extended Berkeley Packet Filter — a Linux kernel technology Cilium uses for high-performance NetworkPolicy enforcement. |
-| **NetworkPolicy** | Firewall rules between pods. "Default deny" means all traffic is blocked unless explicitly allowed. |
-| **Service mesh** | Infrastructure layer managing service-to-service traffic. Provides mTLS, L7 policy, observability. Istio is our mesh. |
-| **mTLS** | Mutual TLS — both sides of a connection present certificates and encrypt traffic. Istio does this automatically. |
-| **ztunnel** | Istio ambient mode's L4 proxy. DaemonSet on every node. Encrypts all traffic between enrolled pods. Transparent. |
-| **Waypoint proxy** | Istio ambient mode's L7 proxy. Per-namespace Envoy instance for JWT validation and authorization policies. |
-| **Envoy** | High-performance proxy used by Istio. Handles connections, load balancing, policy enforcement. |
-| **EnvoyFilter** | Istio CRD for low-level Envoy configuration. Used here to strip forged identity headers. |
-| **Pod Security Standards (PSS)** | Kubernetes-native security profiles: `privileged` (no restrictions), `baseline` (prevents known exploits), `restricted` (maximum hardening). |
-| **SPIFFE** | Identity standard for mTLS certificates. Each pod gets a cryptographic identity (SPIFFE ID). |
-
-### Authentication
-
-| Term | Definition |
-|---|---|
-| **JWT** | JSON Web Token — a signed JSON object with claims (user ID, email, roles, expiry). The mesh validates the signature. |
-| **JWKS** | JSON Web Key Set — public keys Keycloak publishes. Istio caches them and verifies JWT signatures without per-request Keycloak calls. |
-| **OIDC** | OpenID Connect — authentication protocol built on OAuth2. Keycloak implements OIDC. |
-| **PKCE** | Proof Key for Code Exchange — OAuth2 extension preventing authorization code interception. Used for browser login. |
-| **Realm** | Keycloak concept — an isolated tenant with its own users, roles, and clients. |
-| **OPA** | Open Policy Agent — general-purpose policy engine. Evaluates Rego rules for role-based gating. |
-| **Rego** | Policy language for OPA. Declarative rules like "allow if user has editor role". |
-
-### GitOps and infrastructure
-
-| Term | Definition |
-|---|---|
-| **GitOps** | Operations model where git is the single source of truth. Changes are made by pushing to git; a controller applies them. |
-| **IaC** | Infrastructure as Code — managing infrastructure via code files instead of manual commands. |
-| **App of Apps** | ArgoCD pattern: one root Application points to a directory of child Application files. Adding a service = adding a file. |
-| **Reconciliation** | ArgoCD comparing git (desired) to cluster (actual) and applying differences. Runs every ~3 minutes. |
-| **Self-healing** | ArgoCD reverting manual cluster changes to match git. Prevents configuration drift. |
-| **Drift** | When cluster state diverges from git. ArgoCD detects and corrects drift automatically. |
-| **Helm chart** | Package of Kubernetes YAML templates + values. Like apt packages, but for Kubernetes. |
-| **SOPS** | Secrets OPerationS — encrypts/decrypts secret files. Used in the production guide for git-safe secrets. |
-| **age** | Modern encryption tool. SOPS uses age keypairs for encrypting secret files (replaces GPG). |
-
----
-
-## Tooling overview
-
-Every tool installed in this guide and when it is used:
-
-| Tool | What it does | Used in | Runs on |
-|---|---|---|---|
-| **Docker** | Container runtime — k3d needs it to run k3s | §0.2 | Your machine |
-| **kubectl** | Kubernetes CLI — talks to the cluster API | Every section | Your machine |
-| **Helm** | Kubernetes package manager — installs charts | §4, §5 (bootstrap only) | Your machine |
-| **k3d** | Creates k3s clusters inside Docker | §1 | Your machine |
-| **Cilium CLI** | Installs and manages Cilium (CNI) | §2 | Your machine |
-| **istioctl** | Installs and manages Istio (service mesh) | §3, §9 | Your machine |
-| **ArgoCD CLI** | Bootstrap-time ArgoCD management | §5, §7, §8 | Your machine |
-| **curl** | HTTP requests for testing | §10, §11 | Your machine |
-| **jq** | JSON parser — readable API output | §10, §11 | Your machine |
+> **Tip for new Kubernetes users**: skim the glossary in the shared doc before
+> starting this guide. You do not need to memorise anything, but having seen
+> the terms once makes the rest easier to follow.

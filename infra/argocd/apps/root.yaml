@@ -9,13 +9,19 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
+  # The root app remains in the default project — it must be able to create
+  # Application and AppProject resources in the argocd namespace.
   project: default
-  source:
-    repoURL: https://github.com/<org>/register-infra
-    targetRevision: HEAD
-    # ArgoCD watches this directory for Application manifests.
-    # Adding a new Application means adding a YAML file here and pushing.
-    path: infra/argocd/apps
+  sources:
+    # Application manifests (the child apps).
+    - repoURL: https://github.com/<org>/register-infra
+      targetRevision: HEAD
+      path: infra/argocd/apps
+    # AppProject definitions — synced alongside apps so project references
+    # resolve on first sync.
+    - repoURL: https://github.com/<org>/register-infra
+      targetRevision: HEAD
+      path: infra/argocd/projects
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

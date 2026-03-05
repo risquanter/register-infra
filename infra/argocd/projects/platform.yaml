@@ -1,0 +1,68 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: >-
+    Platform concerns: namespace provisioning, Istio mesh policy, network
+    policy, OPA ext_authz, PeerAuthentication. Allowed to create
+    cluster-scoped resources (Namespace) and security policy resources in
+    the register and istio-system namespaces.
+
+  # Only the infra repo is a valid source.
+  sourceRepos:
+    - "https://github.com/<org>/register-infra"
+
+  # Cluster-scoped resources this project may create.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  # Namespace-scoped destinations.
+  destinations:
+    # Namespaces chart uses "default" as release namespace (namespaces are cluster-scoped)
+    - server: https://kubernetes.default.svc
+      namespace: default
+    # Mesh policy, network policy, OPA, PeerAuthentication target register
+    - server: https://kubernetes.default.svc
+      namespace: register
+    # PeerAuthentication may target argocd
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+    # Istio system-level PeerAuthentication
+    - server: https://kubernetes.default.svc
+      namespace: istio-system
+    # Infra namespace network policies
+    - server: https://kubernetes.default.svc
+      namespace: infra
+
+  # Namespace-scoped resource kinds this project may create.
+  # Broad enough for mesh policy + OPA + network policy + RBAC.
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: LimitRange
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: apps
+      kind: Deployment
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: networking.istio.io
+      kind: EnvoyFilter
+    - group: security.istio.io
+      kind: RequestAuthentication
+    - group: security.istio.io
+      kind: AuthorizationPolicy
+    - group: security.istio.io
+      kind: PeerAuthentication
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding

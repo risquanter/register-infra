@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: infra
+  namespace: argocd
+spec:
+  description: >-
+    Infrastructure services: PostgreSQL and Keycloak. Restricted to the infra
+    namespace. Cannot create cluster-scoped resources or deploy outside infra.
+
+  # Bitnami Helm charts are pulled from the public chart repo.
+  # The infra repo is also allowed (for future local charts).
+  sourceRepos:
+    - "https://charts.bitnami.com/bitnami"
+    - "https://github.com/<org>/register-infra"
+
+  # No cluster-scoped resources allowed.
+  clusterResourceWhitelist: []
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: infra
+
+  # Bitnami charts create a wide set of namespace-scoped resources.
+  # Allow the common kinds; deny anything cluster-scoped.
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: apps
+      kind: Deployment
+    - group: apps
+      kind: StatefulSet
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: policy
+      kind: PodDisruptionBudget

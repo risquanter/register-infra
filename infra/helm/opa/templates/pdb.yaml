@@ -1,0 +1,17 @@
+---
+# PodDisruptionBudget — ensures at least one OPA pod is always available.
+# With failure_mode_deny: true on the ext_authz filter, OPA unavailability
+# means 100% 403 for all requests. The PDB prevents voluntary disruptions
+# (node drain, rolling update) from taking down all OPA pods simultaneously.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "opa.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opa.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "opa.selectorLabels" . | nindent 6 }}

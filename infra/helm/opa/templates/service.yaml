@@ -1,0 +1,18 @@
+---
+# OPA Service — the waypoint reaches OPA over gRPC on port {{ .Values.opa.grpcPort }}.
+# ClusterIP is sufficient: only the waypoint (in the same namespace) calls this.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "opa.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opa.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "opa.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc-authz
+      port: {{ .Values.opa.grpcPort }}
+      targetPort: grpc-authz
+      protocol: TCP

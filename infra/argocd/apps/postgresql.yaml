@@ -4,7 +4,7 @@ metadata:
   name: postgresql
   namespace: argocd
 spec:
-  project: default
+  project: infra
   source:
     repoURL: https://charts.bitnami.com/bitnami
     chart: postgresql
@@ -25,6 +25,11 @@ spec:
           containerSecurityContext:
             enabled: true
             runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
         # Disable the bundled PgBouncer — not needed at this scale.
         pgbouncer:
           enabled: false

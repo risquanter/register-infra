@@ -19,47 +19,44 @@
 ║                                                                      ║
 ║  ┌─────────────────────────────────────────────────────────────────┐ ║
 ║  │  register namespace  (PSS: restricted, mesh-enrolled)           │ ║
-║  │                                                                  │ ║
+║  │                                                                 │ ║
 ║  │  ┌──────────────────────────────────────────────────────────┐   │ ║
 ║  │  │  WAYPOINT PROXY  (Envoy, L7)                             │   │ ║
 ║  │  │                                                          │   │ ║
-║  │  │  1. Strip x-user-id / x-user-email / x-user-roles       │   │ ║
+║  │  │  1. Strip x-user-id / x-user-email / x-user-roles        │   │ ║
 ║  │  │     from ALL inbound requests           [EnvoyFilter]    │   │ ║
 ║  │  │                                                          │   │ ║
 ║  │  │  2. Validate JWT signature + expiry                      │   │ ║
 ║  │  │     against Keycloak JWKS endpoint   [RequestAuthn]      │   │ ║
 ║  │  │     → cached public keys, no per-request Keycloak call   │   │ ║
 ║  │  │                                                          │   │ ║
-║  │  │  3. Enforce: request must have a validated JWT principal  │   │ ║
-║  │  │     ("*" requestPrincipal = any valid JWT)  [AuthzPolicy] │   │ ║
+║  │  │  3. Enforce: request must have a validated JWT principal │   │ ║
+║  │  │     ("*" requestPrincipal = any valid JWT)  [AuthzPolicy]│   │ ║
 ║  │  │     No valid JWT → 401, request dropped here             │   │ ║
 ║  │  │                                                          │   │ ║
-║  │  │  4. Deny if x-user-id still present after strip step     │   │ ║
-║  │  │     (defence in depth — catch bypass paths) [AuthzPolicy] │   │ ║
-║  │  │                                                          │   │ ║
-║  │  │  5. Inject x-user-id  ← JWT.sub                         │   │ ║
-║  │  │         x-user-email  ← JWT.email                       │   │ ║
+║  │  │  4. Inject x-user-id  ← JWT.sub                          │   │ ║
+║  │  │         x-user-email  ← JWT.email                        │   │ ║
 ║  │  │         x-user-roles  ← JWT.roles claim                  │   │ ║
 ║  │  └──────────────────────┬───────────────────────────────────┘   │ ║
-║  │                          │  mTLS  (ztunnel, L4)                  │ ║
-║  │                          │  + NetworkPolicy: only waypoint        │ ║
-║  │                          │  may reach app pods   [Cilium]         │ ║
-║  │                          ▼                                        │ ║
-║  │  ┌───────────────────────────────────────┐                       │ ║
-║  │  │  register-app  (Scala / ZIO)          │                       │ ║
-║  │  │                                       │                       │ ║
-║  │  │  Trusts x-user-id header — set by     │                       │ ║
-║  │  │  waypoint only; unreachable externally │                       │ ║
-║  │  │                                       │                       │ ║
-║  │  │  Layer 0: workspace key in URL        │                       │ ║
-║  │  │  Layer 1: + valid x-user-id (JWT)     │                       │ ║
-║  │  │  Layer 2: + SpiceDB relationship      │ (future)              │ ║
-║  │  └──────────┬────────────────────────────┘                       │ ║
-║  │             │ only egress allowed by NetworkPolicy [Cilium]       │ ║
-║  └─────────────┼────────────────────────────────────────────────────┘ ║
-║                │                                                      ║
-║                │   plain TCP (cluster-internal, no mesh enrollment)   ║
-║                ▼                                                      ║
+║  │                          │  mTLS  (ztunnel, L4)                 │ ║
+║  │                          │  + NetworkPolicy: only waypoint      │ ║
+║  │                          │  may reach app pods   [Cilium]       │ ║
+║  │                          ▼                                      │ ║
+║  │  ┌───────────────────────────────────────┐                      │ ║
+║  │  │  register-app  (Scala / ZIO)          │                      │ ║
+║  │  │                                       │                      │ ║
+║  │  │  Trusts x-user-id header — set by     │                      │ ║
+║  │  │  waypoint only; unreachable externally │                     │ ║
+║  │  │                                       │                      │ ║
+║  │  │  Layer 0: workspace key in URL        │                      │ ║
+║  │  │  Layer 1: + valid x-user-id (JWT)     │                      │ ║
+║  │  │  Layer 2: + SpiceDB relationship      │ (future)             │ ║
+║  │  └──────────┬────────────────────────────┘                      │ ║
+║  │             │ only egress allowed by NetworkPolicy [Cilium]     │ ║
+║  └─────────────┼───────────────────────────────────────────────────┘ ║
+║                │                                                     ║
+║                │   plain TCP (cluster-internal, no mesh enrollment)  ║
+║                ▼                                                     ║
 ║  ┌──────────────────────────────────────┐                            ║
 ║  │  infra namespace  (PSS: baseline)    │                            ║
 ║  │                                      │                            ║
@@ -94,8 +91,9 @@
 >
 > **Rollback**: if enrolling the infra namespace causes PostgreSQL or Keycloak
 > probe failures, remove the label (`kubectl label namespace infra
-> istio.io/dataplane-mode-`) and the segment reverts to plain TCP. See the
-> install guide §1.4 for the full rollback procedure.
+> istio.io/dataplane-mode-`) and the segment reverts to plain TCP. See
+> [GITOPS-OPERATIONS.md — Troubleshooting](GITOPS-OPERATIONS.md#troubleshooting)
+> for the full rollback procedure.
 
 ---
 
@@ -115,11 +113,7 @@
                      x-user-id / x-user-email / x-user-roles removed unconditionally.
                      Prevents client forgery of identity headers.
 
-④ HEADER DENY    →  Waypoint (Envoy) — AuthorizationPolicy (deny-forwarded-identity-headers)
-                     If x-user-id is still present after ③ (bypass path), request is denied.
-                     Defence in depth.
-
-⑤ ROLE GATE      →  OPA (standalone pod) — ext_authz gRPC filter on waypoint
+④ ROLE GATE      →  OPA (standalone pod) — ext_authz gRPC filter on waypoint
                      Evaluates: JWT role claims + HTTP method + path (Rego policy).
                      Questions answered:
                        - Does the JWT carry a recognised role (analyst/editor/team_admin)?
@@ -130,11 +124,11 @@
                      Security team override layer: Rego policy changes push without
                      an application deployment (emergency write blocks, audit mandates).
 
-⑥ WORKSPACE KEY  →  Application (Scala/ZIO)
+④ WORKSPACE KEY  →  Application (Scala/ZIO)
                      Layer 0: workspace key in URL = sole credential (free tier).
                      Layer 1: key is an invitation token; x-user-id (from ①–③) also required.
 
-⑦ INSTANCE AUTHZ →  SpiceDB (app layer — future Layer 2)
+⑤ INSTANCE AUTHZ →  SpiceDB (app layer — future Layer 2)
                      Application calls SpiceDB.check(userId, permission, resourceRef).
                      Questions answered:
                        - Is this specific user a member of this specific workspace?
@@ -142,7 +136,7 @@
                      OPA AND SpiceDB: both must allow. OPA deny = 403 (SpiceDB never called).
                      OPA allow + SpiceDB deny = 403. Neither unilaterally grants access.
 
-⑧ NETWORK LAYER  →  Cilium (eBPF) — NetworkPolicy
+⑥ NETWORK LAYER  →  Cilium (eBPF) — NetworkPolicy
                      Default deny-all on register namespace.
                      Explicit allow: waypoint → app pod (ingress).
                      Explicit allow: app pod → postgres:5432 (egress).
@@ -157,18 +151,18 @@
 The key design decision: **the application trusts `x-user-id` but cannot be reached by any process that can forge it.**
 
 ```
-External client              Waypoint                    App
-     │                          │                          │
-     │── x-user-id: forged ──▶  │                          │
-     │                          │  ③ strip                 │
-     │                          │  ① validate JWT          │
-     │                          │  ② check principal       │
-     │                          │  inject x-user-id←JWT.sub│
-     │                          │── x-user-id: <real> ──▶  │
-     │                          │                          │
-     │                                                     │
-     │                                   ⑥ Cilium blocks   │
-     │────────────────────────── direct ──────────────────✗│
+External client              Waypoint                     App
+     │                          │                            │
+     │── x-user-id: forged ──▶  │                            │
+     │                          │  3) strip                  │
+     │                          │  1) validate JWT           │
+     │                          │  2) check principal        │
+     │                          │  inject x-user-id←JWT.sub  │
+     │                          │── x-user-id: <real> ──▶    │
+     │                          │                            │
+     │                                                       │
+     │                                   6) Cilium blocks    │
+     │────────────────────────── direct ─────────────────────│
                            (no path to app pod
                             except via waypoint)
 ```

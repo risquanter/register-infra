@@ -1,0 +1,81 @@
+---
+# OPA Deployment — runs with the envoy_ext_authz_grpc plugin enabled.
+# The waypoint calls OPA over gRPC on port {{ .Values.opa.grpcPort }} before
+# forwarding the request to the application. OPA evaluates allow.rego and
+# returns Allow or Deny.
+#
+# Security: OPA does not need any Kubernetes permissions. It reads policy from
+# a mounted ConfigMap and JWT from the ext_authz CheckRequest. No RBAC required.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opa.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "opa.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "opa.selectorLabels" . | nindent 8 }}
+    spec:
+      # Pod Security — restricted profile (same as rest of register namespace)
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opa
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - run
+            - --server
+            - "--addr={{ .Values.opa.restAddr }}"
+            - "--diagnostic-addr=0.0.0.0:{{ .Values.opa.diagPort }}"
+            - "--set=plugins.envoy_ext_authz_grpc.addr=:{{ .Values.opa.grpcPort }}"
+            - "--set=plugins.envoy_ext_authz_grpc.path={{ .Values.opa.decisionPath }}"
+            - "--set=decision_logs.console={{ .Values.opa.decisionLogsConsole }}"
+            - /policies/allow.rego
+          ports:
+            - name: grpc-authz
+              containerPort: {{ .Values.opa.grpcPort }}
+              protocol: TCP
+            - name: http-diag
+              containerPort: {{ .Values.opa.diagPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: policy
+              mountPath: /policies
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http-diag
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health?bundle=true
+              port: http-diag
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: policy
+          configMap:
+            name: opa-policy

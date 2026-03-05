@@ -1,0 +1,170 @@
+---
+# Default deny-all policy for the infra namespace.
+# Same pattern as the register namespace: no pod can receive or initiate
+# traffic unless an explicit allow policy exists below.
+# Defense-in-depth layer alongside Istio mTLS (PeerAuthentication STRICT).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Allow the register application (via the waypoint) to reach PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-postgres-from-register
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: register
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Allow the register application (via the waypoint) to reach Keycloak.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-keycloak-from-register
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: register
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 8080
+---
+# Allow Keycloak to reach PostgreSQL (internal dependency).
+# Keycloak uses PostgreSQL as its backing store.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-postgres-from-keycloak
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Allow PostgreSQL egress to nowhere explicitly — it only needs to accept
+# incoming connections. This rule is intentionally empty (no egress allowed).
+# If PostgreSQL needs to reach external services (e.g., for WAL archiving),
+# add a targeted egress rule here.
+
+# Allow Keycloak egress to PostgreSQL (same namespace).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-keycloak-to-postgres
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Allow ArgoCD to reach PostgreSQL and Keycloak for health checks.
+# ArgoCD's application-controller checks target resources; the repo-server
+# may need to reach the infra namespace for Helm template rendering.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-argocd
+  namespace: infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argocd
+---
+# Allow istiod to fetch JWKS from Keycloak.
+# istiod retrieves the JWT signing public keys from Keycloak's OIDC discovery
+# endpoint and distributes them to waypoint proxies via xDS. Without this rule,
+# the default-deny blocks JWKS retrieval and ALL JWT validation fails — the
+# waypoint cannot verify token signatures, breaking the entire auth chain.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-keycloak-from-istio-system
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow DNS egress for all infra pods.
+# Required for Kubernetes internal DNS resolution (e.g., keycloak resolving
+# postgresql-postgresql.infra.svc.cluster.local).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+  namespace: infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

@@ -1,0 +1,38 @@
+# OPA image — pin to a specific version, never use :latest.
+# Check https://github.com/open-policy-agent/opa/releases for updates.
+image:
+  repository: openpolicyagent/opa
+  tag: "0.70.0-envoy"
+  pullPolicy: IfNotPresent
+
+# Number of OPA replicas.
+# 2 replicas + PDB ensures rolling updates don't cause 403 blitz
+# (failure_mode_deny: true means OPA unavailability = total service outage).
+replicaCount: 2
+
+# Resource requests and limits per pod.
+# OPA is CPU-bound Rego evaluation — memory usage is minimal.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# OPA server configuration.
+opa:
+  # gRPC port for ext_authz — the waypoint calls this.
+  grpcPort: 9191
+  # REST API — internal only (localhost), not exposed via Service.
+  restAddr: "localhost:8181"
+  # Diagnostic port — health probes and metrics.
+  diagPort: 8282
+  # Decision path — must match the Rego package + rule name.
+  decisionPath: "register/authz/allow"
+  # Log every decision to stdout for observability.
+  decisionLogsConsole: true
+
+# ext_authz EnvoyFilter timeout (seconds).
+# OPA should return in <5ms normally; >100ms indicates misconfiguration.
+extAuthzTimeout: "0.1s"

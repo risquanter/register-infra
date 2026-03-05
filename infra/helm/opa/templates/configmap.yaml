@@ -1,0 +1,16 @@
+---
+# OPA ConfigMap — single source of truth for the Rego policy.
+# The policy is loaded from policies/allow.rego via Helm's .Files.Get.
+# There is no inline copy — any policy change is made in the canonical
+# Rego file and automatically reflected here on chart render.
+# See ADR-INFRA-001 (configuration single-source-of-truth).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opa-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opa.labels" . | nindent 4 }}
+data:
+  allow.rego: |
+{{ .Files.Get "policies/allow.rego" | indent 4 }}

@@ -4,7 +4,7 @@ metadata:
   name: keycloak
   namespace: argocd
 spec:
-  project: default
+  project: infra
   source:
     repoURL: https://charts.bitnami.com/bitnami
     chart: keycloak
@@ -28,6 +28,11 @@ spec:
         containerSecurityContext:
           enabled: true
           runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop: ["ALL"]
   destination:
     server: https://kubernetes.default.svc
     namespace: infra

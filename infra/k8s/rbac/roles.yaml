@@ -1,0 +1,112 @@
+# RBAC Definitions for register-infra
+#
+# Three roles reflecting the access model from ADR-024 (ops path) and
+# AUTHORIZATION-PLAN L2.0 (CI provisioning job):
+#
+#   viewer     — read-only across all application namespaces
+#   deployer   — write access to register + infra namespaces (manual ops)
+#   ci-authz   — scoped to SpiceDB schema apply + tuple management (CI job)
+#
+# These roles are defined but NOT yet bound to users or service accounts.
+# RoleBindings will be created when:
+#   - A second human operator is added (viewer/deployer)
+#   - The CI provisioning job for SpiceDB is implemented (ci-authz, AUTHORIZATION-PLAN L2.0)
+#
+# Until then, the cluster operator uses system:masters via kubeconfig.
+# This file documents the intended access model even in a single-operator setup.
+
+---
+# ─── viewer: read-only across register namespace ───────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: viewer
+  namespace: register
+rules:
+  - apiGroups: ["", "apps"]
+    resources: ["pods", "services", "deployments", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: viewer
+  namespace: infra
+rules:
+  - apiGroups: ["", "apps"]
+    resources: ["pods", "services", "statefulsets", "configmaps", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+---
+# ─── deployer: write access for manual operational tasks ───────────────
+# Used by a human operator (not CI) for tasks like:
+#   - Restarting pods, scaling deployments
+#   - Editing ConfigMaps (e.g., OPA policy hot-reload)
+#   - Managing secrets (rotation)
+# Does NOT grant cluster-scoped permissions (no Namespace/ClusterRole creation).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: register
+rules:
+  - apiGroups: ["", "apps"]
+    resources: ["pods", "services", "deployments", "configmaps", "secrets", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/portforward"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: infra
+rules:
+  - apiGroups: ["", "apps"]
+    resources: ["pods", "services", "statefulsets", "configmaps", "secrets", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets/scale"]
+    verbs: ["update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/portforward"]
+    verbs: ["create"]
+
+---
+# ─── ci-authz: SpiceDB provisioning CI job ─────────────────────────────
+# Scoped to the minimum permissions needed for the CI job that:
+#   1. Applies the SpiceDB schema (schema.zed → ConfigMap or SpiceDB API)
+#   2. Reconciles authorization tuples (idempotent, drift-detected)
+#   3. Runs as a Kubernetes Job or CronJob in the register namespace
+#
+# This role does NOT grant access to application secrets, deployments, or
+# any resource outside what the provisioning job needs.
+# See AUTHORIZATION-PLAN L2.0 exit criteria, ADR-024 ops path.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-authz
+  namespace: register
+rules:
+  # Read ConfigMaps (SpiceDB schema source)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  # Create/manage Jobs for the provisioning task
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete"]
+  # Read pods/logs for job output inspection
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]

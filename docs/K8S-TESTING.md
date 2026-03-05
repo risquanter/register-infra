@@ -75,6 +75,21 @@ pluto version
 # ── Helm (if not already installed) ──────────────────────────────────────────
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 helm version
+
+# ── conftest — OPA/Rego policy checker for static YAML validation ─────────────
+# Tests Kubernetes manifests against custom policies without a cluster.
+# See §4.6 and ADR-INFRA-005.
+CONFTEST_VERSION=$(curl -fsSL https://api.github.com/repos/open-policy-agent/conftest/releases/latest | jq -r .tag_name)
+curl -fsSLO "https://github.com/open-policy-agent/conftest/releases/download/${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION#v}_Linux_x86_64.tar.gz"
+tar xzf conftest_*.tar.gz conftest && sudo mv conftest /usr/local/bin/ && rm conftest_*.tar.gz
+conftest --version
+
+# ── bats-core — Bash Automated Testing System ────────────────────────────────
+# TAP-output test framework for the live-cluster regression suite.
+# See §4.7 and ADR-INFRA-005.
+git clone https://github.com/bats-core/bats-core.git /tmp/bats-install
+sudo /tmp/bats-install/install.sh /usr/local && rm -rf /tmp/bats-install
+bats --version
 ```
 
 ---
@@ -375,6 +390,85 @@ argocd app diff mesh-policy --local infra/k8s/
 
 If the diff shows unexpected changes, review before merging.
 
+### 4.6 Static policy checks — conftest
+
+[conftest](https://www.conftest.dev/) validates Kubernetes manifests against
+OPA/Rego policies **without a cluster**.  This catches structural regressions
+(missing headers, prohibited DENY policies, wrong mTLS mode) at PR time.
+
+```bash
+# install conftest (one-time)
+CONFTEST_VERSION=$(curl -fsSL https://api.github.com/repos/open-policy-agent/conftest/releases/latest | jq -r .tag_name)
+curl -fsSLO "https://github.com/open-policy-agent/conftest/releases/download/${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION#v}_Linux_x86_64.tar.gz"
+tar xzf conftest_*.tar.gz conftest && sudo mv conftest /usr/local/bin/ && rm conftest_*.tar.gz
+
+# run all static policies against the manifests
+conftest test infra/k8s/istio/ -p tests/conftest/policy/
+conftest test infra/k8s/network-policy/ -p tests/conftest/policy/
+```
+
+Policies live in `tests/conftest/policy/` (Rego files).  Each policy targets a
+specific resource kind — see [ADR-INFRA-005](adr/ADR-INFRA-005.md) for the
+rationale.
+
+| Policy file | What it checks |
+|---|---|
+| `envoyfilter.rego` | `request_headers_to_remove` includes all identity headers; waypoint selector present |
+| `authorizationpolicy.rego` | No DENY policy references identity headers (C1 regression guard); ALLOW requires `requestPrincipals` |
+| `requestauthentication.rego` | `outputClaimToHeaders` maps `sub` → `x-user-id`; `audiences` set |
+| `peerauthentication.rego` | Mode must be STRICT; no port-level overrides weaken it |
+| `networkpolicy.rego` | `default-deny-all` covers Ingress + Egress; DNS egress allows UDP/53 + TCP/53 |
+
+### 4.7 Regression suite: identity header security invariants (bats-core)
+
+A [bats-core](https://github.com/bats-core/bats-core) test suite verifies the
+five defence layers that protect `x-user-id` from forgery against a **live
+cluster** (see [SECURITY-FLOW.md](SECURITY-FLOW.md),
+[ADR-INFRA-005](adr/ADR-INFRA-005.md)).
+
+**When to run**: after every Istio or Cilium upgrade, after any change to
+`infra/k8s/istio/` or `infra/k8s/network-policy/`, and in CI against a live
+cluster.
+
+```bash
+# install bats-core (one-time)
+git clone https://github.com/bats-core/bats-core.git /tmp/bats && sudo /tmp/bats/install.sh /usr/local
+
+# run with strict skip semantics (default — exit 2 on skips)
+./tests/run-regression.sh
+
+# allow skips on feature branches
+./tests/run-regression.sh --allow-skip
+
+# against a remote cluster
+INGRESS=https://register.example.com ./tests/run-regression.sh
+
+# pre-set a JWT (skip token fetch)
+KEYCLOAK_TOKEN="eyJ..." ./tests/run-regression.sh
+```
+
+The suite runs five groups of checks:
+
+| Group | What it verifies | Cluster required? |
+|---|---|---|
+| **1. Envoy config_dump** | Waypoint filter chain structure: `request_headers_to_remove` includes identity headers; `jwt_authn`, `rbac`, `ext_authz` filters present | Yes |
+| **2. Unauthenticated requests** | Public routes return 200; authenticated routes reject without JWT; forged `x-user-id` without JWT does not grant access | Yes |
+| **3. Authenticated requests** | Valid JWT accepted; valid JWT + forged header passes (strip works, no DENY regression); tampered JWT rejected; app receives `x-user-id` matching JWT `sub` | Yes (+ Keycloak) |
+| **4. Network isolation** | Direct pod access blocked (NetworkPolicy); PeerAuthentication STRICT active | Yes |
+| **5. Istio resource integrity** | RequestAuthentication, AuthorizationPolicy, EnvoyFilter resources exist with expected configuration; no DENY policy on identity headers (C1 regression guard) | Yes |
+
+**C1 regression specifically**: test 3.2 sends a valid JWT plus a forged
+`x-user-id` header. If the old DENY policy is accidentally re-introduced, this
+test returns 403 and fails. Test 5.4 independently checks that no DENY
+AuthorizationPolicy matching identity headers exists in the namespace.
+
+**Exit code semantics** (see [ADR-INFRA-005](adr/ADR-INFRA-005.md)):
+- **0** — all tests passed
+- **1** — one or more tests failed (regression detected)
+- **2** — tests skipped because prerequisites are missing (cluster down,
+  Keycloak not deployed, etc.).  Blocks merge on `main`; allowed on feature
+  branches with `--allow-skip`.
+
 ---
 
 ## CI pipeline — automated checks on every pull request
@@ -487,7 +581,7 @@ You do not need all of this immediately. Add layers as the project matures.
 | Phase | Add these tests | Rationale |
 |---|---|---|
 | Now (bootstrap) | `terraform fmt`, `terraform validate`, `helm lint`, `kubeconform` | Catch syntax errors immediately; zero setup cost |
-| Wave 1 (Istio live) | T2 + T3 curl checks, `kube-linter` | Verify the security invariants that Wave 2 depends on |
+| Wave 1 (Istio live) | T2 + T3 curl checks, `kube-linter`, **regression suite** | Verify the security invariants that Wave 2 depends on |
 | Wave 2 (requirePresent) | T1 NetworkPolicy check, `cilium connectivity test` | T1 is a Wave 2 blocker per THREAT-CATALOG.md |
 | Wave 3 (SpiceDB) | Full CI pipeline + kuttl e2e tests | System is complex enough that automated end-to-end tests pay off |
 | Pre-k8s upgrade | `pluto detect` on all manifests | Catch deprecated API versions before they break on the new cluster version |
@@ -513,8 +607,10 @@ helm template register infra/helm/register/ | kube-linter lint -
 # Layer 3 — Raw manifests
 kubeconform -strict -summary -ignore-missing-schemas infra/k8s/
 kube-linter lint infra/k8s/
+conftest test infra/k8s/istio/ infra/k8s/network-policy/ -p tests/conftest/policy/
 
 # Layer 4 — Live cluster (requires KUBECONFIG set and cluster running)
 argocd app list
 argocd app diff register --local infra/helm/register/
+./tests/run-regression.sh
 ```

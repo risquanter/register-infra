@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: opa
+  namespace: argocd
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/<org>/register-infra
+    targetRevision: HEAD
+    path: infra/helm/opa
+    helm:
+      releaseName: opa
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: register
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

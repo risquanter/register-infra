@@ -9,10 +9,14 @@ Infrastructure as Code and GitOps configuration for the **register** platform.
 | Cloud infrastructure (VM, network, firewall) | Terraform + Hetzner Cloud provider | `infra/terraform/` |
 | CNI, service mesh, ingress, cert-manager | Terraform Helm provider | `infra/terraform/main.tf` |
 | GitOps controller (ArgoCD) | Terraform Helm provider | `infra/terraform/main.tf` |
-| Namespace declarations + Pod Security labels | Helm chart, ArgoCD-managed | `infra/helm/namespaces/` |
+| Namespace declarations + Pod Security + LimitRanges | Helm chart, ArgoCD-managed | `infra/helm/namespaces/` |
 | Application Helm chart | Helm, ArgoCD-managed | `infra/helm/register/` |
-| ArgoCD Application manifests | YAML, App of Apps pattern | `infra/argocd/apps/` |
-| Istio JWT + AuthorizationPolicy | YAML, ArgoCD-managed | `infra/k8s/istio/` |
+| OPA ext_authz server | Helm chart, ArgoCD-managed | `infra/helm/opa/` |
+| ArgoCD Application manifests + AppProjects | YAML, App of Apps pattern | `infra/argocd/apps/`, `infra/argocd/projects/` |
+| Istio JWT, AuthorizationPolicy, PeerAuthentication | YAML, ArgoCD-managed | `infra/k8s/istio/` |
+| OPA ext_authz EnvoyFilter | YAML, ArgoCD-managed | `infra/k8s/opa/` |
+| Cilium NetworkPolicies | YAML, ArgoCD-managed | `infra/k8s/network-policy/` |
+| RBAC roles | YAML, ArgoCD-managed | `infra/k8s/rbac/` |
 | Encrypted secrets | SOPS + age | `infra/secrets/` |
 
 ## What this repository does NOT own
@@ -26,6 +30,7 @@ Infrastructure as Code and GitOps configuration for the **register** platform.
 |---|---|---|
 | **Local development** (start here) | [docs/LOCAL-K3D-BOOTSTRAP.md](docs/LOCAL-K3D-BOOTSTRAP.md) | Fresh Debian + Docker |
 | Production deploy (Hetzner Cloud) | [docs/K3S-GITOPS-BOOTSTRAP.md](docs/K3S-GITOPS-BOOTSTRAP.md) | Hetzner account + Terraform |
+| **GitOps operations reference** | [docs/GITOPS-OPERATIONS.md](docs/GITOPS-OPERATIONS.md) | — |
 | Learning / reference | [docs/K3S-MANUAL-INSTALL.md](docs/K3S-MANUAL-INSTALL.md) | — |
 | Validation / CI | [docs/K8S-TESTING.md](docs/K8S-TESTING.md) | Running cluster |
 | Security architecture | [docs/SECURITY-FLOW.md](docs/SECURITY-FLOW.md) | — |

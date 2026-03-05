@@ -34,6 +34,15 @@ namespaces:
       enforce: restricted
       audit: restricted
       warn: restricted
+    # LimitRange: default resource requests/limits for pods without explicit specs.
+    # These are soft guardrails — pods that declare their own resources override them.
+    # TODO: migrate to ResourceQuota for hard namespace-level caps once resource
+    # usage is understood via kubectl top (see K3S-GITOPS-BOOTSTRAP.md).
+    limitRange:
+      defaultCpu: 500m
+      defaultMemory: 512Mi
+      defaultRequestCpu: 100m
+      defaultRequestMemory: 128Mi
 
   # infra — infrastructure services (PostgreSQL, Keycloak).
   #
@@ -59,6 +68,11 @@ namespaces:
       audit: restricted
       warn: restricted
     # probeExcludePorts: "5432,8080"   # uncomment if liveness probes fail post-enrolment
+    limitRange:
+      defaultCpu: 500m
+      defaultMemory: 512Mi
+      defaultRequestCpu: 100m
+      defaultRequestMemory: 128Mi
 
   # observability — metrics, tracing, logging
   - name: observability

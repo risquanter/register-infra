@@ -1,0 +1,10 @@
+apiVersion: v2
+name: opa
+description: >-
+  OPA (Open Policy Agent) with envoy_ext_authz_grpc plugin.
+  Provides coarse-grained claim-based authorization at the Istio waypoint.
+  Policy is loaded from a single canonical Rego source via Files.Get —
+  no inline duplication (see ADR-INFRA-001).
+type: application
+version: 0.1.0
+appVersion: "0.70.0"

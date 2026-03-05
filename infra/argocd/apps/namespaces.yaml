@@ -4,7 +4,7 @@ metadata:
   name: namespaces
   namespace: argocd
 spec:
-  project: default
+  project: platform
   source:
     repoURL: https://github.com/<org>/register-infra
     targetRevision: HEAD

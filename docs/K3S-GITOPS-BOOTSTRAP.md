@@ -22,6 +22,7 @@ Terraform, Cilium, Istio ambient, and ArgoCD.
 |---|---|---|
 | [LOCAL-K3D-BOOTSTRAP.md](LOCAL-K3D-BOOTSTRAP.md) | Local dev cluster on your machine | First step — learn and validate |
 | **This guide** | Production deploy to Hetzner Cloud via Terraform | After local validation works |
+| [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Shared GitOps reference (ArgoCD apps, workflow, glossary) | After bootstrap completes |
 | [K3S-MANUAL-INSTALL.md](K3S-MANUAL-INSTALL.md) | Educational — every command explained imperatively | Reference / learning |
 | [K8S-TESTING.md](K8S-TESTING.md) | Validation and CI pipeline | After cluster is running |
 | [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture | Reference during auth testing |
@@ -71,44 +72,8 @@ The boundary is the moment you `kubectl apply -f infra/argocd/apps/root.yaml`.
 
 ## Repository layout
 
-> **Why this layout?** ArgoCD watches specific paths in the repo. Organizing
-> by tool (Terraform, Helm, ArgoCD apps, raw k8s manifests) keeps the concerns
-> separated and makes ArgoCD path filters work cleanly.
-
-```
-infra/
-  terraform/              # VM provisioning + bootstrap Helm releases
-    main.tf               #   all Terraform resources (network, firewall, VM, Helm)
-    variables.tf          #   input variables with defaults
-    outputs.tf            #   output values (server IP etc.)
-    cloud-init.yaml       #   first-boot script: installs k3s
-  helm/
-    register/             # application Helm chart
-      Chart.yaml
-      values.yaml
-      templates/
-    namespaces/           # namespace declarations with PSS + mesh labels
-      Chart.yaml
-      values.yaml
-      values-infra-no-mesh.yaml   # fallback: removes infra from mesh
-      templates/
-  argocd/
-    apps/                 # App of Apps directory — ArgoCD watches this
-      root.yaml           #   the single root Application
-      namespaces.yaml     #   namespace chart Application
-      postgresql.yaml     #   PostgreSQL Application (Bitnami remote chart)
-      keycloak.yaml       #   Keycloak Application (Bitnami remote chart)
-      register.yaml       #   Application Deployment + Image Updater annotations
-      mesh-policy.yaml    #   Istio/OPA/NetworkPolicy manifests
-  k8s/
-    istio/                # RequestAuthentication, AuthorizationPolicy, EnvoyFilter
-    network-policy/       # Cilium NetworkPolicies (default-deny + allow rules)
-    opa/                  # OPA deployment + ext-authz EnvoyFilter
-  secrets/                # SOPS-encrypted Secret manifests (committed safely)
-  opa/
-    policies/             # Rego source files
-.sops.yaml                # SOPS config (age recipient public key)
-```
+See [GITOPS-OPERATIONS.md — Repository layout](GITOPS-OPERATIONS.md#repository-layout)
+for the full annotated tree (kept in one place to avoid drift between guides).
 
 ---
 
@@ -538,11 +503,12 @@ ArgoCD will now discover and deploy these Applications automatically:
 
 | ArgoCD Application | What it deploys | Source |
 |---|---|---|
-| `namespaces` | Namespaces (`argocd`, `register`, `infra`, `observability`) with Pod Security labels + mesh enrollment | [infra/helm/namespaces/](../infra/helm/namespaces/) |
-| `postgresql` | PostgreSQL database (StatefulSet) | Bitnami Helm chart (remote) — see [postgresql.yaml](../infra/argocd/apps/postgresql.yaml) |
-| `keycloak` | Keycloak identity provider | Bitnami Helm chart (remote) — see [keycloak.yaml](../infra/argocd/apps/keycloak.yaml) |
-| `mesh-policy` | Istio JWT/auth policies, OPA role gating, NetworkPolicies | [infra/k8s/](../infra/k8s/) — see [mesh-policy.yaml](../infra/argocd/apps/mesh-policy.yaml) |
-| `register` | Application Deployment + Image Updater config | [infra/helm/register/](../infra/helm/register/) — see [register.yaml](../infra/argocd/apps/register.yaml) |
+| `namespaces` | Namespaces with Pod Security labels, mesh enrollment, LimitRanges | [infra/helm/namespaces/](../infra/helm/namespaces/) |
+| `postgresql` | PostgreSQL database (StatefulSet) | Bitnami Helm chart (remote) |
+| `keycloak` | Keycloak identity provider | Bitnami Helm chart (remote) |
+| `opa` | OPA ext_authz server (2 replicas + PDB) | [infra/helm/opa/](../infra/helm/opa/) |
+| `mesh-policy` | Istio auth, PeerAuthentication, NetworkPolicies, RBAC | [infra/k8s/](../infra/k8s/) |
+| `register` | Application Deployment + Image Updater config | [infra/helm/register/](../infra/helm/register/) |
 
 ### 4.5 Watch the sync
 
@@ -565,78 +531,17 @@ kill $PF_PID 2>/dev/null || true
 
 ---
 
-## 5) What ArgoCD manages (reference)
+## 5) What ArgoCD manages / The deploy loop
 
-> **These files are in the repository** — not duplicated here. This section
-> provides brief descriptions so you know what each file controls. Edit the
-> actual files and push to git; ArgoCD applies the changes.
+Full reference for ArgoCD Applications, AppProject scoping, security policies,
+the automated deploy loop, and the day-to-day GitOps workflow:
 
-### Application declarations (`infra/argocd/apps/`)
-
-| File | What it declares | Key configuration |
-|---|---|---|
-| [root.yaml](../infra/argocd/apps/root.yaml) | Root App of Apps | Watches `infra/argocd/apps/`, automated sync + prune + self-heal, cascade finalizer |
-| [namespaces.yaml](../infra/argocd/apps/namespaces.yaml) | Namespace Helm chart | Points at `infra/helm/namespaces/`, creates namespaces with PSS labels and mesh enrollment |
-| [postgresql.yaml](../infra/argocd/apps/postgresql.yaml) | PostgreSQL database | Bitnami chart v16.4.0, references `postgres-credentials` Secret for auth, 10Gi PVC |
-| [keycloak.yaml](../infra/argocd/apps/keycloak.yaml) | Keycloak IdP | Bitnami chart, connects to PostgreSQL via internal DNS, references encrypted credentials |
-| [register.yaml](../infra/argocd/apps/register.yaml) | Application Deployment | Image Updater annotations for automated GHCR → git → cluster deploy loop |
-| [mesh-policy.yaml](../infra/argocd/apps/mesh-policy.yaml) | Security policies | Istio RequestAuthentication, AuthorizationPolicy, OPA Deployment, NetworkPolicies |
-
-### Namespace chart (`infra/helm/namespaces/`)
-
-The namespace Helm chart at [infra/helm/namespaces/](../infra/helm/namespaces/)
-declares each namespace with:
-- **Pod Security Standards labels**: `enforce`, `audit`, `warn` — controls what
-  pods are allowed to run (e.g. `restricted` prohibits root containers)
-- **Mesh enrollment label**: `istio.io/dataplane-mode: ambient` — tells Istio's
-  ztunnel to intercept traffic for this namespace
-
-See [values.yaml](../infra/helm/namespaces/values.yaml) for the namespace
-definitions. A fallback file
-[values-infra-no-mesh.yaml](../infra/helm/namespaces/values-infra-no-mesh.yaml)
-removes the `infra` namespace from the mesh (useful if database pods have probe
-issues with ztunnel).
-
-### Security policies (`infra/k8s/`)
-
-| File | What it enforces |
-|---|---|
-| [istio/request-authentication.yaml](../infra/k8s/istio/request-authentication.yaml) | Validates JWT signatures against Keycloak's JWKS endpoint |
-| [istio/authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml) | Requires valid JWT on all requests to the register namespace |
-| [istio/envoy-filter-strip-headers.yaml](../infra/k8s/istio/envoy-filter-strip-headers.yaml) | Strips forged identity headers (`x-user-id`, `x-user-email`) before they reach the app |
-| [opa/deployment.yaml](../infra/k8s/opa/deployment.yaml) | OPA gRPC server evaluating Rego role-based policies |
-| [opa/ext-authz-filter.yaml](../infra/k8s/opa/ext-authz-filter.yaml) | Routes waypoint authorization checks to OPA |
-| [network-policy/register.yaml](../infra/k8s/network-policy/register.yaml) | Default-deny + allow rules: only waypoint can reach app pods |
+> **[GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md)** — shared operations
+> reference (identical between the local and Hetzner guides).
 
 ---
 
-## 6) The automated deploy loop
-
-> **This is the end-state workflow** — how code changes reach the running
-> cluster without any manual intervention.
-
-```
-git push (application code change)
-  → GitHub Actions (CI):
-      - sbt test (compile + unit tests)
-      - docker buildx build --push ghcr.io/<org>/<image>:<git-sha>
-  → ArgoCD Image Updater (runs in-cluster, polls GHCR every ~2 min):
-      - detects new image digest at ghcr.io/<org>/<image>
-      - commits updated tag to infra/helm/register/.argocd-source-register.yaml
-  → ArgoCD (polls git every ~3 min, or via webhook for instant sync):
-      - detects the commit on HEAD
-      - renders Helm chart with new image tag
-      - performs rolling update in the register namespace
-  → new pod running within ~90 seconds of git push
-```
-
-> **Webhook for instant sync**: for faster feedback, configure a GitHub webhook
-> pointing at the ArgoCD API server. This requires the ArgoCD server to be
-> reachable from the internet (via an Ingress or Cloudflare Tunnel).
-
----
-
-## 7) Teardown
+## 6) Teardown
 
 ```bash
 cd infra/terraform
@@ -654,9 +559,28 @@ rm -f kubeconfig.yaml
 > again. Because all state lives in git (Helm charts, ArgoCD apps, SOPS-encrypted
 > secrets), nothing is lost. The only external dependency is the age private key.
 
+> **TODO: Terraform remote state migration.** Terraform state is currently
+> stored locally (`terraform.tfstate` next to `main.tf`). This is fine for a
+> single operator, but has two consequences:
+>
+> 1. **State loss** (disk failure, laptop theft) = Hetzner resources become
+>    orphaned. You can recover by importing them, but it is painful.
+> 2. **CI cannot run `terraform apply`** — the GitHub Actions workflows
+>    (`terraform-plan.yaml`, `terraform-apply.yaml`) require access to the
+>    state file, which only exists on your machine.
+>
+> When you need either multi-operator access or CI-driven Terraform:
+>
+> 1. Create an S3-compatible bucket (Hetzner Object Storage, AWS S3, or MinIO)
+> 2. Uncomment the `backend "s3"` block in
+>    [main.tf](../infra/terraform/main.tf) and fill in the bucket details
+> 3. Run `terraform init -migrate-state` — Terraform moves the local state
+>    to the remote bucket
+> 4. Configure the CI workflows with bucket credentials
+
 ---
 
-## 8) Security boundaries and accepted risks
+## 7) Security boundaries and accepted risks
 
 > **Reference frameworks**: these boundaries are informed by the
 > [CIS Kubernetes Benchmark](https://www.cisecurity.org/benchmark/kubernetes)
@@ -675,6 +599,14 @@ rm -f kubeconfig.yaml
 | **First SSH connection** | `StrictHostKeyChecking=no` for kubeconfig retrieval | One-time risk during fresh VM provisioning. Pin host key afterward. |
 
 ### Known limitation: ztunnel + PostgreSQL liveness probes
+
+> **TODO: ResourceQuota migration.** LimitRange (currently deployed) sets
+> *default* resource requests/limits for pods that don't declare them. It does
+> **not** cap total namespace resource consumption. Once resource profiles are
+> understood (`kubectl top pods -n register`), add per-namespace ResourceQuota
+> to the namespaces chart (`templates/resourcequota.yaml`) with hard caps on
+> CPU, memory, and pod count. This prevents a runaway pod from starving OPA —
+> which with `failure_mode_deny: true` would cause 100% 403 for all requests.
 
 > **Be honest about this.** The `infra` namespace is enrolled in the mesh
 > (`meshEnroll: true` in [values.yaml](../infra/helm/namespaces/values.yaml)).
@@ -720,17 +652,6 @@ terraform apply
 Terraform is idempotent — it will skip completed resources and retry the
 kubeconfig step.
 
-### ArgoCD Application stuck at OutOfSync
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 8080:80 &
-argocd app sync <app-name>
-argocd app get <app-name>
-
-# check events in the target namespace
-kubectl -n <namespace> get events --sort-by=.lastTimestamp | tail -20
-```
-
 ### SOPS decryption fails
 
 ```bash
@@ -752,117 +673,15 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-### PostgreSQL or Keycloak crash after mesh enrollment
-
-Database liveness probes can conflict with ztunnel interception. Rollback:
-
-```bash
-kubectl label namespace infra istio.io/dataplane-mode- --overwrite
-```
-
-Or use the fallback values file — edit the namespaces Application to use
-`values-infra-no-mesh.yaml`.
-
-### Quick health check
-
-```bash
-kubectl get nodes -o wide
-kubectl get ns --show-labels
-kubectl -n kube-system get pods         # Cilium
-kubectl -n istio-system get pods        # Istio
-kubectl -n cert-manager get pods        # cert-manager
-kubectl -n argocd get pods              # ArgoCD + Image Updater
-kubectl -n infra get pods               # PostgreSQL, Keycloak
-kubectl -n register get pods            # Application + OPA
-kubectl -n register get gateway         # Waypoint proxy
-```
+> For environment-agnostic troubleshooting (ArgoCD stuck, PG/KC crash, quick
+> health check), see
+> [GITOPS-OPERATIONS.md — Troubleshooting](GITOPS-OPERATIONS.md#troubleshooting).
 
 ---
 
-## Glossary
-
-### Core Kubernetes concepts
-
-| Term | Definition |
-|---|---|
-| **Cluster** | A set of machines (nodes) running Kubernetes. Here, a single Hetzner VM. |
-| **Node** | A machine in the cluster. Runs pods. |
-| **Pod** | Smallest deployable unit — one or more containers sharing network. |
-| **Namespace** | Logical partition inside a cluster. Pods in different namespaces are isolated. |
-| **Deployment** | Declares "run N copies of this pod". Kubernetes ensures the count matches. |
-| **StatefulSet** | Like Deployment, but for databases: stable names and persistent storage. |
-| **DaemonSet** | Runs one pod on every node. Used by Cilium and ztunnel. |
-| **Service** | Stable DNS name + IP routing traffic to pods. |
-| **Secret** | Kubernetes resource for sensitive data. Encrypted at rest with `--secrets-encryption`. |
-| **ConfigMap** | Like Secret, but for non-sensitive configuration. |
-| **CRD** | Custom Resource Definition — extends the Kubernetes API with new types. |
-| **kubeconfig** | File with cluster connection details. Never commit to git. |
-| **RBAC** | Role-Based Access Control — Kubernetes permission system. |
-| **PVC** | Persistent Volume Claim — request for disk storage that survives pod restarts. |
-
-### Networking and security
-
-| Term | Definition |
-|---|---|
-| **CNI** | Container Network Interface — pod networking plugin. Cilium is ours. |
-| **eBPF** | Linux kernel technology Cilium uses for high-performance NetworkPolicy. |
-| **NetworkPolicy** | Firewall rules between pods. Default-deny blocks all traffic unless allowed. |
-| **Service mesh** | Infrastructure layer managing service-to-service traffic (mTLS, L7 policy). |
-| **mTLS** | Mutual TLS — both sides present certificates. Istio does this automatically. |
-| **ztunnel** | Istio ambient mode's L4 proxy. DaemonSet on every node. Handles mTLS. |
-| **Waypoint proxy** | Istio ambient's L7 proxy. Per-namespace Envoy for JWT validation and auth. |
-| **Envoy** | High-performance proxy used by Istio. |
-| **EnvoyFilter** | Istio CRD for low-level Envoy config. Strips forged headers. |
-| **Pod Security Standards** | K8s-native profiles: `privileged`, `baseline`, `restricted`. |
-
-### Authentication
-
-| Term | Definition |
-|---|---|
-| **JWT** | JSON Web Token — signed claims (user ID, roles, expiry). Mesh validates signature. |
-| **JWKS** | JSON Web Key Set — public keys for JWT verification. Keycloak publishes, Istio caches. |
-| **OIDC** | OpenID Connect — auth protocol on top of OAuth2. Keycloak implements it. |
-| **OPA** | Open Policy Agent — evaluates Rego rules for role-based gating. |
-| **Rego** | OPA's policy language. Declarative rules like "allow if user has editor role". |
-
-### GitOps and infrastructure
-
-| Term | Definition |
-|---|---|
-| **GitOps** | Operations model: git is the single source of truth. Controller applies changes. |
-| **IaC** | Infrastructure as Code — managing infrastructure via code, not manual commands. |
-| **Terraform** | IaC tool. Declares cloud resources (VMs, networks, firewalls). `terraform apply` creates them. |
-| **Terraform state** | File tracking what Terraform has created. Required for updates and teardown. |
-| **cloud-init** | First-boot automation for VMs. Runs commands, writes files, installs packages. |
-| **App of Apps** | ArgoCD pattern: one root Application manages a directory of child Applications. |
-| **Reconciliation** | ArgoCD comparing git (desired) to cluster (actual) every ~3 minutes. |
-| **Self-healing** | ArgoCD reverting manual cluster changes to match git. |
-| **Drift** | Cluster state diverging from git. ArgoCD detects and corrects automatically. |
-| **Helm chart** | Package of Kubernetes YAML templates + configuration values. |
-| **SOPS** | Secrets OPerationS — encrypts/decrypts files. Values encrypted, keys visible. |
-| **age** | Modern encryption tool. SOPS uses age keypairs for secret encryption. |
-| **GHCR** | GitHub Container Registry — hosts Docker images. Image Updater polls it. |
-
----
-
-## Tooling overview
-
-Every tool used in this guide:
-
-| Tool | What it does | Used in | Runs on |
-|---|---|---|---|
-| **Terraform** | Provisions cloud infrastructure declaratively | §3 | Your machine |
-| **hcloud** | Hetzner Cloud CLI — API token + SSH key management | §2 | Your machine |
-| **age** | Generates encryption keypairs for SOPS | §1 | Your machine |
-| **SOPS** | Encrypts/decrypts secret files in git | §1 | Your machine + cluster (ArgoCD plugin) |
-| **kubectl** | Kubernetes CLI — talks to the cluster API | §4 | Your machine |
-| **ArgoCD CLI** | Bootstrap-time ArgoCD management | §4 | Your machine |
-| **ArgoCD** | GitOps controller — syncs cluster state to git | §4 onward | In-cluster |
-| **Image Updater** | Polls GHCR for new images, commits tag to git | §6 | In-cluster |
-| **Cilium** | CNI — pod networking + NetworkPolicy enforcement | Installed by Terraform | In-cluster |
-| **Istio** | Service mesh — mTLS + L7 policy + waypoint proxies | Installed by Terraform | In-cluster |
-| **cert-manager** | TLS certificate automation | Installed by Terraform | In-cluster |
-| **k3s** | Lightweight Kubernetes distribution | Installed by cloud-init | On the VM |
-| **OPA** | Policy engine — role-based gating via Rego rules | Deployed by ArgoCD | In-cluster |
-| **Keycloak** | Identity provider — issues JWTs, JWKS endpoint | Deployed by ArgoCD | In-cluster |
-| **PostgreSQL** | Database for Keycloak + application | Deployed by ArgoCD | In-cluster |
+> **Glossary, tooling overview, and repository layout** are maintained in the
+> shared operations reference to avoid drift between the local and Hetzner guides:
+>
+> - [Glossary](GITOPS-OPERATIONS.md#glossary)
+> - [Tooling overview](GITOPS-OPERATIONS.md#tooling-overview)
+> - [Repository layout](GITOPS-OPERATIONS.md#repository-layout)

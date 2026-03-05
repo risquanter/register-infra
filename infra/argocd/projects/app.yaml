@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: app
+  namespace: argocd
+spec:
+  description: >-
+    Application workloads: the register Scala/ZIO service. Restricted to the
+    register namespace. Cannot create cluster-scoped resources, Istio policy,
+    or deploy outside register.
+
+  sourceRepos:
+    - "https://github.com/<org>/register-infra"
+
+  # No cluster-scoped resources allowed.
+  clusterResourceWhitelist: []
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: register
+
+  # Only the resource kinds the register Helm chart creates.
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: apps
+      kind: Deployment

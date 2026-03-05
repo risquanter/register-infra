@@ -1,8 +1,10 @@
-# image.tag is written by ArgoCD Image Updater on each new GHCR push.
-# Do not edit image.tag manually — changes will be overwritten.
 image:
   repository: ghcr.io/<org>/<image>
-  tag: latest
+  # tag is written by ArgoCD Image Updater on each new GHCR push.
+  # "0.0.0" is a deliberate placeholder — no image with this tag exists.
+  # The pod stays in ImagePullBackOff until Image Updater commits the real
+  # digest. For local dev, override with: --set image.tag=local
+  tag: "0.0.0"
   pullPolicy: IfNotPresent
 
 # Number of application replicas.
