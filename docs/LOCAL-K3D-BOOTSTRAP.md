@@ -70,7 +70,7 @@ single ArgoCD Application that tells ArgoCD to watch your git repository.
 ║  ③ Istio ambient (service mesh — mTLS + L7 policy)            ║
 ║  ④ cert-manager (TLS certificate automation)                  ║
 ║  ⑤ ArgoCD (GitOps engine)                                     ║
-║  ⑥ Create dev secrets (local only — prod uses SOPS)           ║
+║  ⑥ Secrets bootstrap (SOPS + age — same as production)        ║
 ║  ⑦ Connect ArgoCD → git repo                                  ║
 ║  ⑧ Apply root App-of-Apps     ← the handoff moment            ║
 ║                                                               ║
@@ -251,7 +251,34 @@ rm -rf "$ISTIO_DIR"
 istioctl version --remote=false
 ```
 
-### 0.8 ArgoCD CLI
+### 0.8 SOPS + age
+
+> **What are SOPS and age?** SOPS (Secrets OPerationS) encrypts YAML values
+> while leaving keys visible — you can see which fields a secret contains
+> (for code review and auditability) without seeing the values. age is the
+> modern encryption backend SOPS uses (replacing GPG).
+>
+> Both the local and production guides use the same SOPS + age workflow.
+> This is intentional — the encrypted secret files in `infra/secrets/` are
+> the single source of truth for both environments.
+
+```bash
+# ── age ── modern encryption tool
+sudo apt install -y age
+age --version
+
+# ── SOPS ── encrypts/decrypts secret files using age keys
+# SECURITY: verify checksum after download.
+SOPS_VERSION=$(curl -fsSL https://api.github.com/repos/getsops/sops/releases/latest | jq -r .tag_name)
+curl -fsSLO "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64"
+curl -fsSLO "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.checksums.txt"
+grep "sops-${SOPS_VERSION}.linux.amd64$" "sops-${SOPS_VERSION}.checksums.txt" | sha256sum --check
+sudo install -m755 "sops-${SOPS_VERSION}.linux.amd64" /usr/local/bin/sops
+rm -f "sops-${SOPS_VERSION}.linux.amd64" "sops-${SOPS_VERSION}.checksums.txt"
+sops --version
+```
+
+### 0.9 ArgoCD CLI
 
 > **What is ArgoCD?** ArgoCD is a GitOps controller for Kubernetes. It
 > watches a git repository and ensures the cluster state matches what is
@@ -618,52 +645,154 @@ kill $PF_PID 2>/dev/null || true
 
 ---
 
-## 6) Create dev secrets (local approach — no SOPS)
+## 6) Secrets bootstrap (SOPS + age)
 
 > **What is this about?** The ArgoCD Application manifests for PostgreSQL and
 > Keycloak reference Kubernetes Secrets by name (e.g. `postgres-credentials`).
 > When ArgoCD tries to deploy PostgreSQL, it expects this Secret to already
 > exist so it can read the database password from it.
 >
-> In production, secrets are encrypted in git with SOPS + age (see the
-> [Hetzner guide](K3S-GITOPS-BOOTSTRAP.md) §1). ArgoCD decrypts them at sync
-> time. For local dev we skip that complexity and create the Secrets directly.
+> We use the **same SOPS + age workflow** as the production Hetzner guide.
+> The encrypted files in `infra/secrets/` are the single source of truth —
+> both environments decrypt from the same files. This eliminates secret name
+> drift and ensures the SOPS workflow is tested locally before production.
 >
-> **Security note**: These passwords only exist inside your local k3d cluster.
-> They are not committed to git. If you destroy the cluster, they are gone.
+> **On first bootstrap** you generate the age keypair and create the encrypted
+> files. On subsequent cluster recreations (`k3d cluster delete` + re-create),
+> the keypair and encrypted files already exist — skip to "Decrypt and apply".
+
+### 6.1 Generate age keypair (first time only)
+
+> **Skip this** if you already have a keypair at `~/.config/sops/age/keys.txt`
+> (e.g. from the production guide).
 
 ```bash
-# SECURITY: read -s hides passwords from terminal output and shell history.
-read -r -s -p "PostgreSQL password: " PG_PASS; echo
-read -r -s -p "Keycloak admin password: " KC_PASS; echo
-read -r -s -p "Keycloak DB password: " KC_DB_PASS; echo
+# WHAT: create an age keypair. The private key is written to the file.
+#   The public key is printed to stdout (and stored in the file's header comment).
+# SECURITY: this private key unlocks ALL secrets. Back it up immediately.
+mkdir -p ~/.config/sops/age
+age-keygen -o ~/.config/sops/age/keys.txt
 
+# NOTE: copy the public key from the output — it looks like:
+#   age1xxxxxxxxxxxxxxxxxxxxxxxxx
+# You will need it for .sops.yaml below.
+```
+
+### 6.2 Configure SOPS (first time only)
+
+> **Skip this** if `.sops.yaml` in the repo root already has your public key.
+
+```bash
+# WHAT: tell SOPS which encryption key to use for files matching a path pattern.
+# HOW IT WORKS: when you run `sops infra/secrets/foo.yaml`, SOPS checks
+#   .sops.yaml, finds the matching path_regex, and encrypts with the specified
+#   age public key. Decryption uses the private key at ~/.config/sops/age/keys.txt.
+cat > .sops.yaml <<YAML
+creation_rules:
+  - path_regex: infra/secrets/.*\.yaml$
+    age: age1xxxxxxxxxxxxxxxxxxxxxxxxx   # ← replace with YOUR public key
+YAML
+```
+
+### 6.3 Create and encrypt secret files (first time only)
+
+> **Skip this** if `infra/secrets/postgres.enc.yaml` and
+> `infra/secrets/keycloak.enc.yaml` already exist (from a previous bootstrap
+> or from the production guide).
+
+```bash
+# WHAT: sops opens your $EDITOR with a plain YAML file.
+#   Write the secret values in plain text, save and close.
+#   SOPS encrypts the values on exit — keys stay human-readable.
+sops infra/secrets/postgres.enc.yaml
+```
+
+Example content (plain text — SOPS encrypts this on save):
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: infra
+type: Opaque
+stringData:
+  postgres-password: "REPLACE_WITH_STRONG_PASSWORD"
+  keycloak-db-password: "REPLACE_WITH_STRONG_PASSWORD"
+```
+
+```bash
+sops infra/secrets/keycloak.enc.yaml
+```
+
+Example content:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-credentials
+  namespace: infra
+type: Opaque
+stringData:
+  admin-password: "REPLACE_WITH_STRONG_PASSWORD"
+```
+
+```bash
+# VERIFICATION: view the encrypted file — values are ciphertext, keys are plain.
+cat infra/secrets/postgres.enc.yaml
+
+# Safe to commit — ciphertext is meaningless without the age private key.
+git add .sops.yaml infra/secrets/
+git commit -m "chore: add SOPS config and encrypted secrets"
+git push
+```
+
+### 6.4 Install SOPS decryption key into the cluster
+
+> **What is this?** ArgoCD needs the age private key to decrypt
+> `infra/secrets/*.enc.yaml` at sync time. We store it as a Kubernetes Secret
+> in the `argocd` namespace where the SOPS plugin can read it.
+>
+> **Identical to production** — the Hetzner guide does the same step in §4.2.
+> k3d does not support `--secrets-encryption` (etcd-level encryption at rest),
+> but this is acceptable on a local machine where the "etcd" data lives inside
+> a Docker container on your own disk.
+
+```bash
+kubectl -n argocd create secret generic sops-age-key \
+  --from-file=keys.txt="$HOME/.config/sops/age/keys.txt" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# VERIFICATION: the secret should exist.
+kubectl -n argocd get secret sops-age-key
+```
+
+### 6.5 Decrypt and apply secrets to the cluster
+
+> **This is the step you repeat** (along with §6.4) on every cluster
+> recreation. Steps 6.1–6.3 are one-time setup.
+
+```bash
 # WHAT: pre-create the infra namespace.
 # WHY: ArgoCD will manage this namespace via the namespaces Helm chart, but the
 #   Secrets must exist BEFORE the PostgreSQL/Keycloak Applications sync.
 #   "Chicken and egg" problem: ArgoCD deploys Postgres into `infra`, but
 #   Postgres needs a Secret in `infra` to start. Creating the namespace and
 #   Secrets now breaks the cycle.
-# NOTE: --dry-run=client -o yaml | kubectl apply -f - is the idempotent pattern.
-#   It generates the YAML locally and applies it, creating the resource only if
-#   it doesn't already exist (or updating it if it does). You will see this
-#   pattern repeatedly in Kubernetes guides.
 kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f -
 
-# WHAT: create the Secret objects that PostgreSQL and Keycloak expect.
-# These names (postgres-credentials, keycloak-credentials) must match exactly
-# what the ArgoCD Application manifests in infra/argocd/apps/ reference.
-kubectl -n infra create secret generic postgres-credentials \
-  --from-literal=postgres-password="$PG_PASS" \
-  --from-literal=keycloak-db-password="$KC_DB_PASS" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# WHAT: decrypt the SOPS files and apply them as Kubernetes Secrets.
+# HOW IT WORKS: `sops -d` decrypts to stdout using the age key at
+#   ~/.config/sops/age/keys.txt. The output is plain YAML that kubectl applies.
+# SECURITY: the decrypted values only exist in the pipe — they are not written
+#   to disk or stored in shell variables.
+sops -d infra/secrets/postgres.enc.yaml | kubectl apply -f -
+sops -d infra/secrets/keycloak.enc.yaml | kubectl apply -f -
 
-kubectl -n infra create secret generic keycloak-credentials \
-  --from-literal=admin-password="$KC_PASS" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# SECURITY: immediately wipe passwords from shell memory.
-unset PG_PASS KC_PASS KC_DB_PASS
+# VERIFICATION: secrets exist with the expected keys.
+kubectl -n infra get secret postgres-credentials -o jsonpath='{.data}' | jq keys
+kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
 ```
 
 ---
@@ -1086,9 +1215,9 @@ When the auth chain, GitOps workflow, and application all work locally:
    provisions the VM and installs the same bootstrap layer (Cilium, Istio,
    ArgoCD) that you installed manually here
 3. Point ArgoCD at the **same git repo** — it deploys the identical stack
-4. The only things that change: VM provisioning (Terraform), secret management
-   (SOPS+age instead of manual `kubectl create secret`), and secret encryption
-   at rest (`--secrets-encryption` on k3s)
+4. The only things that change: VM provisioning (Terraform) and secret
+   encryption at rest (`--secrets-encryption` on k3s). Secrets are already
+   managed with SOPS + age in both environments
 
 Your Helm charts, ArgoCD Applications, Istio policies, OPA rules, and
 NetworkPolicies are **portable as-is** — they do not know or care whether
@@ -1105,7 +1234,7 @@ the cluster is k3d on your laptop or k3s on a Hetzner VM.
 | Area | Production (Hetzner guide) | Local dev (this guide) | Why the difference is acceptable |
 |---|---|---|---|
 | Secrets at rest | k3s `--secrets-encryption` (AES-CBC) | Not available in k3d | Data is in a Docker container on your own machine |
-| Secrets in git | SOPS + age encryption | Manual `kubectl create secret` | Local passwords never leave your machine |
+| Secrets in git | SOPS + age encryption | SOPS + age encryption (same) | Same encrypted files, same workflow |
 | Network perimeter | Hetzner firewall, CIDR-restricted SSH | Docker bridge network | No public exposure |
 | Supply chain | GHCR + digest pinning | `k3d image import` | No registry in the loop |
 | Pod Security | Restricted PSS (same) | Restricted PSS (same) | Same labels, same enforcement |

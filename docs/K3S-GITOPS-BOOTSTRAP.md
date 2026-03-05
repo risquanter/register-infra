@@ -5,7 +5,7 @@ Terraform, Cilium, Istio ambient, and ArgoCD.
 
 - **Target**: single-node k3s on a Hetzner Cloud VM (adaptable to any bare Linux VM)
 - **Principle**: every cluster state change is a `git push` or a `terraform apply` — no imperative commands after bootstrap
-- **Secret strategy**: SOPS + age — secrets encrypted in git, no external secret manager
+- **Secret strategy**: SOPS + age + YubiKey — hardware-backed dual-recipient encryption, no external secret manager
 - **GitOps engine**: ArgoCD with App of Apps pattern
 
 > **New to Kubernetes?** Start with the
@@ -131,13 +131,21 @@ rm -f argocd-linux-amd64 cli_checksums.txt
 
 ---
 
-## 1) Secrets bootstrap (age + SOPS)
+## 1) Secrets bootstrap (age + SOPS + YubiKey)
 
-> **What is happening here?** You generate an encryption keypair. Secrets in
-> git will be encrypted with the public key — anyone can encrypt. Only the
-> holder of the private key can decrypt. The private key goes on your machine
-> and into the cluster (as a Kubernetes Secret) so ArgoCD can decrypt at sync
-> time.
+> **What is happening here?** You set up a **dual-recipient** encryption
+> model: your YubiKey holds the primary private key (hardware-bound, non-
+> exportable), and a software key is generated for ArgoCD cluster-side
+> decryption. Every secret file is encrypted to **both** recipients — either
+> one can independently decrypt. For a deep explanation of the cryptographic
+> model, primitives, and use-case walk-throughs, see
+> [SOPS-YUBIKEY-MODEL.md](SOPS-YUBIKEY-MODEL.md).
+>
+> **Why dual-recipient?** ArgoCD must decrypt autonomously at sync time (no
+> human present). A YubiKey-only setup would block all automated syncs. The
+> software key is the unavoidable concession to automation — but it never
+> sits as plaintext on disk. It is encrypted to your YubiKey in the repo
+> and injected into the cluster once (§4.2).
 >
 > **Why not HashiCorp Vault or AWS KMS?** At this scale (single operator,
 > single cluster), SOPS + age provides equivalent security for secrets at rest
@@ -145,41 +153,102 @@ rm -f argocd-linux-amd64 cli_checksums.txt
 > Vault when you have multiple teams or compliance requirements that mandate
 > centralized secret management.
 
-### 1.1 Generate age keypair
+### 1.0 Install age-plugin-yubikey
+
+> **What is this?** The plugin lets age use your YubiKey's PIV applet for
+> encryption/decryption. The private key is generated **on the YubiKey chip**
+> — it never exists on disk, cannot be exported, and requires physical touch
+> to use.
 
 ```bash
-# WHAT: create an age keypair. The private key is written to the file.
-#   The public key is printed to stdout (and stored in the file's header comment).
-# SECURITY: this private key is the SINGLE CREDENTIAL that unlocks all secrets.
-#   Back it up to a password manager immediately. Treat it like a root password.
-mkdir -p ~/.config/sops/age
-age-keygen -o ~/.config/sops/age/keys.txt
+# WHAT: pcscd is the smart card daemon. Required for YubiKey PIV communication.
+sudo apt-get install -y pcscd libpcsclite-dev
+
+# WHAT: install the age YubiKey plugin.
+# Option A — cargo (if Rust toolchain is available):
+cargo install age-plugin-yubikey
+
+# Option B — pre-built binary:
+# See https://github.com/str4d/age-plugin-yubikey/releases
+# Download, verify checksum, install to /usr/local/bin/age-plugin-yubikey
+```
+
+### 1.1 Generate YubiKey age identity
+
+```bash
+# WHAT: generate a new age identity inside a YubiKey PIV slot.
+#   The private key is created ON the chip — it never touches disk.
+#   The interactive wizard prompts for slot selection and PIN/touch policy.
+# SECURITY: choose touch-policy=always so every decryption requires
+#   physical touch on the YubiKey.
+age-plugin-yubikey
+
+# WHAT: print the YubiKey recipient (public key) for use in .sops.yaml.
+# NOTE: copy this — it looks like: age1yubikey1q...
+age-plugin-yubikey --list
+```
+
+### 1.2 Generate software key for cluster-side decryption
+
+```bash
+# WHAT: generate a standard age keypair. This key is for ArgoCD — it will
+#   live inside the cluster as a Kubernetes Secret.
+# SECURITY: we generate it to a temporary file, encrypt it to the YubiKey
+#   in Step 1.4, then shred the plaintext. It NEVER persists on disk
+#   unencrypted after this section.
+age-keygen -o /tmp/cluster-age-key.txt
 
 # NOTE: copy the public key from the output — it looks like:
 #   age1xxxxxxxxxxxxxxxxxxxxxxxxx
-# You will need it for .sops.yaml below.
+# You will need BOTH public keys (YubiKey + this one) for .sops.yaml below.
 ```
 
-### 1.2 Configure SOPS
+### 1.3 Configure SOPS with dual recipients
 
 ```bash
-# WHAT: tell SOPS which encryption key to use for files matching a path pattern.
-# HOW IT WORKS: when you run `sops infra/secrets/foo.yaml`, SOPS checks
-#   .sops.yaml, finds the matching path_regex, and encrypts with the specified
-#   age public key. Decryption uses the private key at ~/.config/sops/age/keys.txt.
+# WHAT: tell SOPS to encrypt files to BOTH recipients.
+# HOW IT WORKS: when you run `sops infra/secrets/foo.yaml`, SOPS creates a
+#   random DATA_KEY, encrypts the file with it, then encrypts the DATA_KEY
+#   separately to each recipient. Either private key can recover the DATA_KEY.
 cat > .sops.yaml <<YAML
 creation_rules:
   - path_regex: infra/secrets/.*\.yaml$
-    age: age1xxxxxxxxxxxxxxxxxxxxxxxxx   # ← replace with YOUR public key
+    age: >-
+      age1yubikey1qXXXXXXXXXXXX,
+      age1XXXXXXXXXXXXXXXXXXXXXX
 YAML
+# ↑ Replace the first with your YubiKey recipient (from §1.1)
+#   Replace the second with the software public key (from §1.2)
 ```
 
-### 1.3 Create and encrypt secrets
+### 1.4 Protect the software key with your YubiKey
+
+```bash
+# WHAT: encrypt the cluster software key to ONLY the YubiKey recipient.
+#   This creates a file that can only be decrypted by someone holding
+#   the physical YubiKey.
+# WHY: so the software key can live safely in the repo. When you need to
+#   re-inject it into a new cluster (§4.2), you decrypt it with a touch.
+sops --encrypt \
+  --age "$(age-plugin-yubikey --list | grep '^age1')" \
+  --input-type binary \
+  --output infra/secrets/cluster-age-key.enc.yaml \
+  /tmp/cluster-age-key.txt
+
+# SECURITY: shred the plaintext software key from disk immediately.
+shred -u /tmp/cluster-age-key.txt
+
+# VERIFICATION: the plaintext key is gone.
+ls /tmp/cluster-age-key.txt  # should fail: No such file or directory
+```
+
+### 1.5 Create and encrypt application secrets
 
 ```bash
 # WHAT: sops opens your $EDITOR with a plain YAML file.
 #   Write the secret values in plain text, save and close.
 #   SOPS encrypts the values on exit — keys stay human-readable.
+#   The file is encrypted to BOTH recipients (per .sops.yaml).
 sops infra/secrets/postgres.enc.yaml
 ```
 
@@ -204,20 +273,28 @@ sops infra/secrets/keycloak.enc.yaml
 
 ```bash
 # VERIFICATION: view the encrypted file — values are ciphertext, keys are plain.
+# You will see TWO recipient blocks in the sops metadata (YubiKey + software).
 cat infra/secrets/postgres.enc.yaml
 
-# Safe to commit — ciphertext is meaningless without the age private key.
+# Safe to commit — ciphertext is meaningless without a private key.
 git add .sops.yaml infra/secrets/
-git commit -m "chore: add SOPS config and encrypted secret stubs"
+git commit -m "chore: add SOPS config and encrypted secrets (dual-recipient)"
 ```
 
-> **Key custody summary**: the age private key at `~/.config/sops/age/keys.txt`
-> unlocks ALL secrets. It lives in two places:
-> 1. Your machine (for encrypting/decrypting locally)
-> 2. The cluster (as a Kubernetes Secret, installed in §4.2, so ArgoCD can decrypt)
+> **Key custody summary** (see [SOPS-YUBIKEY-MODEL.md — What lives
+> where](SOPS-YUBIKEY-MODEL.md#what-lives-where) for the full table):
 >
-> If this key is lost, you cannot decrypt the secrets in git. You would need
-> to re-create all secrets from scratch.
+> | Artifact | Location |
+> |---|---|
+> | YubiKey private key | YubiKey chip (non-exportable) |
+> | Software private key (encrypted) | `cluster-age-key.enc.yaml` in repo |
+> | Software private key (plaintext) | Kubernetes Secret only (shredded from disk) |
+> | Both public keys | `.sops.yaml` in repo |
+>
+> There is **no single plaintext file** that unlocks everything. The
+> YubiKey is the root of trust. If the YubiKey is lost, you cannot
+> decrypt `cluster-age-key.enc.yaml` — you would need to re-create all
+> secrets from scratch.
 
 ---
 
@@ -439,18 +516,30 @@ kill $PF_PID 2>/dev/null || true
 
 ### 4.2 Install SOPS decryption key into the cluster
 
-> **What is this?** ArgoCD needs the age private key to decrypt
-> `infra/secrets/*.enc.yaml` at sync time. We store it as a Kubernetes Secret
-> in the `argocd` namespace where the SOPS plugin can read it.
+> **What is this?** ArgoCD needs the software age private key to decrypt
+> `infra/secrets/*.enc.yaml` at sync time. The software key is stored
+> encrypted in the repo (`cluster-age-key.enc.yaml`), protected by your
+> YubiKey. Here you decrypt it with a YubiKey touch and inject it into
+> the cluster.
 >
-> **Security note**: this is the only time the age private key leaves your
-> machine and enters the cluster. The Secret is encrypted at rest by k3s's
-> `--secrets-encryption` flag (configured in cloud-init).
+> **Security note**: the plaintext software key is piped directly into
+> `kubectl` and never written to disk. The Secret is encrypted at rest
+> by k3s's `--secrets-encryption` flag (configured in cloud-init).
+> See [SOPS-YUBIKEY-MODEL.md — Use Case 3](SOPS-YUBIKEY-MODEL.md#use-case-3-bootstrap-the-cluster-after-cluster-creation)
+> for the full explanation of what happens here.
 
 ```bash
-kubectl -n argocd create secret generic sops-age-key \
-  --from-file=keys.txt="$HOME/.config/sops/age/keys.txt" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# WHAT: decrypt the cluster software key using your YubiKey (touch required),
+#   then pipe it directly into kubectl to create the Secret.
+# SECURITY: the plaintext key never touches disk — it flows through the pipe.
+sops --decrypt --input-type binary infra/secrets/cluster-age-key.enc.yaml \
+  | kubectl -n argocd create secret generic sops-age-key \
+      --from-file=keys.txt=/dev/stdin \
+      --dry-run=client -o yaml \
+  | kubectl apply -f -
+
+# VERIFICATION:
+kubectl -n argocd get secret sops-age-key
 ```
 
 ### 4.3 Connect the GitHub repository
@@ -589,7 +678,7 @@ rm -f kubeconfig.yaml
 | Boundary | Protection | Accepted risk |
 |---|---|---|
 | **Secrets at rest** | k3s `--secrets-encryption` (AES-CBC) | Single-node: node compromise = key compromise. Mitigate with disk encryption. |
-| **Secrets in git** | SOPS + age encryption | Age private key is the single point of failure. Loss = locked out of all secrets. |
+| **Secrets in git** | SOPS + age dual-recipient (YubiKey + software key). See [SOPS-YUBIKEY-MODEL.md](SOPS-YUBIKEY-MODEL.md). | YubiKey is the root of trust. Loss of YubiKey = locked out of cluster key and all secrets. |
 | **Container images** | GHCR private registry, digest pinning via Image Updater | Image Updater PAT has `read:packages` scope only. |
 | **API server access** | Hetzner firewall restricts port 6443 to `operator_cidr` | Must update CIDR when ISP changes your IP. |
 | **SSH access** | Key-only auth, firewall-restricted to `operator_cidr` | No bastion host — direct SSH from operator IP. |
