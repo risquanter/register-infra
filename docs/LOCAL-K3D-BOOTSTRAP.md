@@ -717,8 +717,8 @@ metadata:
   namespace: infra
 type: Opaque
 stringData:
-  postgres-password: "REPLACE_WITH_STRONG_PASSWORD"
-  keycloak-db-password: "REPLACE_WITH_STRONG_PASSWORD"
+  postgres-password: "POSTGRES_SUPERUSER_PASSWORD"      # PostgreSQL superuser (postgres)
+  keycloak-db-password: "KEYCLOAK_DB_USER_PASSWORD"      # Keycloak's dedicated DB user — distinct from the superuser and from the Keycloak admin UI password
 ```
 
 ```bash
@@ -735,7 +735,7 @@ metadata:
   namespace: infra
 type: Opaque
 stringData:
-  admin-password: "REPLACE_WITH_STRONG_PASSWORD"
+  admin-password: "KEYCLOAK_ADMIN_UI_PASSWORD"           # Keycloak web admin console — unrelated to the database passwords above
 ```
 
 ```bash
@@ -755,9 +755,55 @@ git push
 > in the `argocd` namespace where the SOPS plugin can read it.
 >
 > **Identical to production** — the Hetzner guide does the same step in §4.2.
-> k3d does not support `--secrets-encryption` (etcd-level encryption at rest),
-> but this is acceptable on a local machine where the "etcd" data lives inside
-> a Docker container on your own disk.
+>
+> **What `--secrets-encryption` does and why k3d lacks it:**
+>
+> On a real k3s node, you can pass `--secrets-encryption` in the server start
+> flags. This tells k3s to encrypt every Kubernetes `Secret` object with
+> AES-CBC before writing it to etcd (the key-value store that persists all
+> cluster state). The encryption key is derived from a key file on the node's
+> disk. Without this flag, Kubernetes Secrets are stored as **base64 in
+> plaintext** in etcd — not encrypted, just encoded. Anyone who can read the
+> etcd data file on the node's filesystem can extract every Secret in the
+> cluster with a simple base64 decode.
+>
+> k3d does not expose this flag because k3d itself is a wrapper that starts k3s
+> inside a Docker container. The k3d CLI abstracts the k3s server arguments, and
+> `--secrets-encryption` is not one of the arguments k3d passes through. Even
+> if you attempted to inject it, k3d's container lifecycle management would
+> not handle the required key file bootstrap correctly.
+>
+> **Why this is acceptable locally, and what actually protects the secret here:**
+>
+> The threat that `--secrets-encryption` defends against is: *an attacker gains
+> read access to the etcd data files on the node's disk*. On a Hetzner VM with
+> a public IP, there are realistic paths to this: a misconfigured API server,
+> a stolen disk image, or physical access to the datacenter. On your local
+> machine, the etcd data lives inside a Docker container's overlay filesystem —
+> a directory on your own disk, not exposed to any network.
+>
+> The relevant threat model locally is not "someone reads the etcd data files"
+> but "someone has access to my machine". If your machine is compromised to the
+> point where an attacker can reach the Docker container's filesystem, they
+> already have broader access than any single Kubernetes Secret provides.
+>
+> What does protect the age key here:
+>
+> | Layer | What it does |
+> |---|---|
+> | SOPS + age encryption in git | The key itself is never in git. The *secrets it decrypts* are encrypted in git. |
+> | Kubernetes RBAC | Only the `argocd` namespace ServiceAccounts can read `sops-age-key`. Pods in `register` or `infra` cannot. |
+> | NetworkPolicy (Cilium) | Pod-to-pod traffic is restricted. No pod can query the Kubernetes API directly unless its ServiceAccount is explicitly granted it. |
+> | Istio mTLS | internal argocd pod-to-pod traffic (including when the SOPS plugin reads the key) is mTLS encrypted between authenticated workloads. |
+>
+> **The accepted risk** is: if someone has root on your machine while the cluster
+> is running, they can reach the Docker container, find the etcd data directory,
+> and extract the base64-encoded `sops-age-key` Secret. This is an accepted
+> local dev risk because: (a) the local cluster holds dev-only throwaway
+> credentials, not production values, and (b) machine compromise at that level
+> is outside the scope of any Kubernetes security control. The production Hetzner
+> guide mitigates this with `--secrets-encryption` + Hetzner's disk encryption
+> option — see [K3S-GITOPS-BOOTSTRAP.md §7](K3S-GITOPS-BOOTSTRAP.md#7-security-boundaries-and-accepted-risks).
 
 ```bash
 kubectl -n argocd create secret generic sops-age-key \
@@ -775,11 +821,12 @@ kubectl -n argocd get secret sops-age-key
 
 ```bash
 # WHAT: pre-create the infra namespace.
-# WHY: ArgoCD will manage this namespace via the namespaces Helm chart, but the
-#   Secrets must exist BEFORE the PostgreSQL/Keycloak Applications sync.
-#   "Chicken and egg" problem: ArgoCD deploys Postgres into `infra`, but
-#   Postgres needs a Secret in `infra` to start. Creating the namespace and
-#   Secrets now breaks the cycle.
+# WHY: the Secrets applied in the next step must exist before ArgoCD syncs
+#   the PostgreSQL and Keycloak Applications — those workloads read the
+#   Secrets at startup and will fail if they are absent. The namespace must
+#   exist before Secrets can be created inside it. ArgoCD will later adopt
+#   and manage this namespace via the namespaces Helm chart; creating it here
+#   first is simply the required ordering.
 kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f -
 
 # WHAT: decrypt the SOPS files and apply them as Kubernetes Secrets.
