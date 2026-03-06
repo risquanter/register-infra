@@ -846,10 +846,17 @@ kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
 
 ## 7) Connect ArgoCD to your git repo
 
-> **What are we doing?** Two things:
-> 1. Updating the ArgoCD Application YAML files in the repo to point to YOUR
->    GitHub URL (they currently contain a `<org>` placeholder)
-> 2. Telling ArgoCD CLI "here is the git repo you should watch"
+> **What are we doing?** Three things, in this order:
+> 1. Set the correct SSH repo URL in the ArgoCD Application manifests
+> 2. Create a deploy key so ArgoCD can clone the private repo
+> 3. Register the repo with the ArgoCD CLI
+>
+> **Why SSH and not HTTPS?** This is a private repository. ArgoCD runs as a
+> pod inside the cluster — it cannot use your YubiKey or personal SSH agent.
+> The standard pattern is a **GitHub Deploy Key**: a dedicated software
+> SSH keypair, read-only, scoped to this one repo, stored as a Kubernetes
+> Secret. Your personal YubiKey-backed key handles your `git push`. ArgoCD
+> gets its own separate key with no hardware dependency.
 >
 > **GitOps principle — single source of truth**: the git repository is the
 > authoritative declaration of what should run in the cluster. ArgoCD never
@@ -861,13 +868,15 @@ kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
 ### 7.1 Update Application manifests with your repo URL
 
 ```bash
-# WHAT: replace the <org> placeholder with the actual GitHub org in all
-# ArgoCD Application files that reference this repository.
+# WHAT: replace the <org> placeholder with the SSH URL in all ArgoCD
+# Application files that reference this repository.
+# WHY SSH URL: ArgoCD will authenticate with a deploy key (SSH), so the
+#   manifests must use the SSH form of the URL. HTTPS + SSH key does not work.
 # NOTE: files that reference external chart repos (e.g. postgresql.yaml
-# pointing at charts.bitnami.com) do not need this change.
+#   pointing at charts.bitnami.com) do not need this change.
 cd /home/danago/projects/register-infra
 
-REPO_URL="https://github.com/risquanter/register-infra"
+REPO_URL="git@github.com:risquanter/register-infra.git"
 
 sed -i "s|https://github.com/<org>/register-infra|${REPO_URL}|g" \
   infra/argocd/apps/root.yaml \
@@ -876,61 +885,30 @@ sed -i "s|https://github.com/<org>/register-infra|${REPO_URL}|g" \
   infra/argocd/apps/mesh-policy.yaml \
   infra/argocd/apps/opa.yaml
 
-# WHAT: commit this change so ArgoCD sees the correct URLs when it clones.
-# BEST PRACTICE: in a team workflow, this would be a PR with review.
+# WHAT: commit so ArgoCD sees the correct URL when it clones.
 git add infra/argocd/apps/
-git commit -m "chore: set actual repo URL in ArgoCD Applications"
+git commit -m "chore: set SSH repo URL in ArgoCD Application manifests"
 git push
 ```
 
-### 7.2 Register the repo with ArgoCD
-
-> **Why do we need to "register" the repo?** ArgoCD maintains an internal list
-> of trusted repositories. This is a security feature — it prevents someone
-> from crafting an Application manifest that points to a malicious repo.
-> The `argocd repo add` command adds your repo to this allow list.
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 9090:80 &
-PF_PID=$!
-sleep 3
-
-# WHAT: log in to ArgoCD. The CLI session token from §5.1 does not persist —
-#   the port-forward was killed and time has passed. Always re-login here.
-argocd login localhost:9090 --username admin --insecure
-
-# WHAT: register the repository with ArgoCD.
-# For a PUBLIC repository this is enough — ArgoCD clones it anonymously.
-# --insecure: skips TLS certificate verification TO THE ARGOCD SERVER (which
-#   is on localhost via port-forward, so there is no TLS). This does NOT affect
-#   the security of the connection to GitHub (which uses HTTPS normally).
-argocd repo add "$REPO_URL" --insecure
-
-kill $PF_PID 2>/dev/null || true
-```
-
-### 7.3 Private repository — deploy key setup
+### 7.2 Create a GitHub Deploy Key for ArgoCD
 
 > **Why not your personal SSH key or YubiKey?** ArgoCD runs as a pod inside
-> the cluster. It has no access to hardware security keys (YubiKey, etc.) on
-> your USB bus, and sharing your personal private key with a cluster process
-> is poor practice. The standard pattern is a **GitHub Deploy Key**: a plain
-> software SSH keypair that is:
-> - **Read-only** — can clone and pull, cannot push
+> the cluster. It has no access to hardware security keys on your USB bus, and
+> sharing your personal private key with a cluster process is poor practice.
+> A deploy key is:
+> - **Read-only** — can clone and pull, cannot push to the repo
 > - **Scoped to one repo** — not your entire GitHub account
-> - **Stored as a Kubernetes Secret** in the `argocd` namespace
->
-> Your personal YubiKey-backed SSH key handles your `git push`. ArgoCD gets
-> its own separate key. These are two completely independent identities.
+> - **Stored as a Kubernetes Secret** — ArgoCD reads it from there at sync time
 
 ```bash
-# WHAT: generate a dedicated SSH keypair for ArgoCD — no passphrase so ArgoCD
-# can use it non-interactively. Ed25519 is the modern, compact algorithm.
-# SECURITY: this key has read-only access to one repo. It is NOT backed by
-# hardware. That is intentional — the cluster needs to use it unattended.
+# WHAT: generate a dedicated SSH keypair for ArgoCD.
+# - No passphrase (-N ""): ArgoCD must use this key unattended inside the cluster.
+# - Ed25519: modern algorithm, compact key, strong security.
+# SECURITY: read-only access to one repo. Not hardware-backed by design.
 ssh-keygen -t ed25519 -C "argocd@register-dev" -f ~/.ssh/argocd_deploy_key -N ""
 
-# WHAT: print the PUBLIC key. Copy this — you will paste it into GitHub.
+# WHAT: print the public key. Copy this to paste into GitHub.
 cat ~/.ssh/argocd_deploy_key.pub
 ```
 
@@ -942,49 +920,37 @@ Add the public key to GitHub:
 4. Leave **Allow write access** unchecked — ArgoCD only needs read access
 5. Click **Add key**
 
-```bash
-# WHAT: tell ArgoCD about this repo using the SSH URL (not HTTPS) and the
-# deploy key. ArgoCD stores the key as a Secret in the argocd namespace.
-# --ssh-private-key-path: path to the private key on your machine — ArgoCD
-#   reads it once now and stores it in the cluster. You can delete it locally
-#   afterwards if you want.
-# --insecure-skip-server-verification: skips verification of the ArgoCD server
-#   TLS cert (same as --insecure above — we're on localhost via port-forward).
-SSH_REPO_URL="git@github.com:risquanter/register-infra.git"
+### 7.3 Register the repo with ArgoCD
 
+> **Why do we need to "register" the repo?** ArgoCD maintains an internal list
+> of trusted repositories. This is a security feature — it prevents someone
+> from crafting an Application manifest that points to a malicious repo.
+> `argocd repo add` adds your repo to this allow list and stores the deploy
+> key as a Kubernetes Secret in the `argocd` namespace.
+
+```bash
 kubectl -n argocd port-forward svc/argocd-server 9090:80 &
 PF_PID=$!
 sleep 3
 
+# WHAT: log in to ArgoCD. The CLI session token from §5.1 does not persist —
+#   the port-forward was killed and time has passed. Always re-login here.
 argocd login localhost:9090 --username admin --insecure
 
-argocd repo add "$SSH_REPO_URL" \
+# WHAT: register the repo with the deploy key.
+# --ssh-private-key-path: ArgoCD reads the key once and stores it as a
+#   Kubernetes Secret. You can delete the local file afterwards.
+# --insecure-skip-server-verification: skips TLS verification to the ArgoCD
+#   server — we are on localhost via port-forward, so there is no server cert.
+#   This does NOT affect the SSH connection to GitHub.
+argocd repo add "$REPO_URL" \
   --ssh-private-key-path ~/.ssh/argocd_deploy_key \
   --insecure-skip-server-verification
 
 kill $PF_PID 2>/dev/null || true
 
-# WHAT: after ArgoCD has read the key, you can optionally remove it from disk.
-# The private key is now stored as a Kubernetes Secret in the argocd namespace.
-# rm ~/.ssh/argocd_deploy_key
-```
-
-Now update the Application manifests to use the SSH URL, and push:
-
-```bash
-# WHAT: the manifests in infra/argocd/apps/ currently reference the HTTPS URL
-# set in §7.1. ArgoCD will reject them if the registered credential is SSH.
-# Update all manifests that point at this repo to the SSH URL.
-sed -i "s|https://github.com/risquanter/register-infra|git@github.com:risquanter/register-infra.git|g" \
-  infra/argocd/apps/root.yaml \
-  infra/argocd/apps/namespaces.yaml \
-  infra/argocd/apps/register.yaml \
-  infra/argocd/apps/mesh-policy.yaml \
-  infra/argocd/apps/opa.yaml
-
-git add infra/argocd/apps/
-git commit -m "chore: switch ArgoCD app manifests to SSH repo URL"
-git push
+# WHAT: the private key is now stored in the cluster. Remove it from disk.
+rm ~/.ssh/argocd_deploy_key
 ```
 
 ---
@@ -1030,6 +996,9 @@ ArgoCD will now discover and deploy these Applications automatically:
 kubectl -n argocd port-forward svc/argocd-server 9090:80 &
 PF_PID=$!
 sleep 3
+
+# WHAT: log in to ArgoCD. Always re-login after starting a new port-forward.
+argocd login localhost:9090 --username admin --insecure
 
 # WHAT: list all ArgoCD Applications and their sync/health status.
 # "Synced" + "Healthy" means the cluster matches git and the pods are running.
