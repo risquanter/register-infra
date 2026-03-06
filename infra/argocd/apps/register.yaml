@@ -29,7 +29,7 @@ metadata:
 spec:
   project: app
   source:
-    repoURL: https://github.com/<org>/register-infra
+    repoURL: https://github.com/risquanter/register-infra
     targetRevision: HEAD
     path: infra/helm/register
     helm:

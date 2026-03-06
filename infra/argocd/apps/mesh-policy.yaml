@@ -6,7 +6,7 @@ metadata:
 spec:
   project: platform
   source:
-    repoURL: https://github.com/<org>/register-infra
+    repoURL: https://github.com/risquanter/register-infra
     targetRevision: HEAD
     # Deploys all raw Kubernetes manifests under infra/k8s/:
     #   istio/          — RequestAuthentication, AuthorizationPolicy, EnvoyFilters,
