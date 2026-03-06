@@ -848,7 +848,7 @@ kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
 
 > **What are we doing?** Two things:
 > 1. Updating the ArgoCD Application YAML files in the repo to point to YOUR
->    GitHub URL (they ship with `<org>` placeholders)
+>    GitHub URL (they currently contain a `<org>` placeholder)
 > 2. Telling ArgoCD CLI "here is the git repo you should watch"
 >
 > **GitOps principle — single source of truth**: the git repository is the
@@ -861,13 +861,13 @@ kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
 ### 7.1 Update Application manifests with your repo URL
 
 ```bash
-# WHAT: replace the placeholder <org> with your actual GitHub username/org
-# in all ArgoCD Application files that reference this repository.
+# WHAT: replace the <org> placeholder with the actual GitHub org in all
+# ArgoCD Application files that reference this repository.
 # NOTE: files that reference external chart repos (e.g. postgresql.yaml
 # pointing at charts.bitnami.com) do not need this change.
-cd /path/to/register-infra   # cd to the repo root
+cd /home/danago/projects/register-infra
 
-REPO_URL="https://github.com/<your-user>/register-infra"   # ← edit this
+REPO_URL="https://github.com/risquanter/register-infra"
 
 sed -i "s|https://github.com/<org>/register-infra|${REPO_URL}|g" \
   infra/argocd/apps/root.yaml \
@@ -1220,18 +1220,18 @@ described there at [The automated deploy loop](GITOPS-OPERATIONS.md#the-automate
 
 ```bash
 # WHAT: build your application Docker image on your host machine.
-docker build -t ghcr.io/<org>/<image>:dev .
+docker build -t ghcr.io/risquanter/<image>:dev .
 
 # WHAT: import the image into k3d. This makes it available to pods without
 # pulling from any registry.
-k3d image import ghcr.io/<org>/<image>:dev -c register-dev
+k3d image import ghcr.io/risquanter/<image>:dev -c register-dev
 ```
 
 Update `infra/helm/register/values.yaml` to use the `dev` tag:
 
 ```yaml
 image:
-  repository: ghcr.io/<org>/<image>
+  repository: ghcr.io/risquanter/<image>
   tag: dev
   pullPolicy: IfNotPresent
 ```
