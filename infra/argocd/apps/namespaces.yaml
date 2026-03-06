@@ -6,7 +6,7 @@ metadata:
 spec:
   project: platform
   source:
-    repoURL: https://github.com/risquanter/register-infra
+    repoURL: git@github.com:risquanter/register-infra.git
     targetRevision: HEAD
     path: infra/helm/namespaces
     helm:

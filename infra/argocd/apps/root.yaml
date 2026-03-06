@@ -14,12 +14,12 @@ spec:
   project: default
   sources:
     # Application manifests (the child apps).
-    - repoURL: https://github.com/risquanter/register-infra
+    - repoURL: git@github.com:risquanter/register-infra.git
       targetRevision: HEAD
       path: infra/argocd/apps
     # AppProject definitions — synced alongside apps so project references
     # resolve on first sync.
-    - repoURL: https://github.com/risquanter/register-infra
+    - repoURL: git@github.com:risquanter/register-infra.git
       targetRevision: HEAD
       path: infra/argocd/projects
   destination:
