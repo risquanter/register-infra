@@ -873,7 +873,8 @@ sed -i "s|https://github.com/<org>/register-infra|${REPO_URL}|g" \
   infra/argocd/apps/root.yaml \
   infra/argocd/apps/namespaces.yaml \
   infra/argocd/apps/register.yaml \
-  infra/argocd/apps/mesh-policy.yaml
+  infra/argocd/apps/mesh-policy.yaml \
+  infra/argocd/apps/opa.yaml
 
 # WHAT: commit this change so ArgoCD sees the correct URLs when it clones.
 # BEST PRACTICE: in a team workflow, this would be a PR with review.
@@ -894,19 +895,96 @@ kubectl -n argocd port-forward svc/argocd-server 9090:80 &
 PF_PID=$!
 sleep 3
 
+# WHAT: log in to ArgoCD. The CLI session token from §5.1 does not persist —
+#   the port-forward was killed and time has passed. Always re-login here.
+argocd login localhost:9090 --username admin --insecure
+
 # WHAT: register the repository with ArgoCD.
+# For a PUBLIC repository this is enough — ArgoCD clones it anonymously.
 # --insecure: skips TLS certificate verification TO THE ARGOCD SERVER (which
 #   is on localhost via port-forward, so there is no TLS). This does NOT affect
 #   the security of the connection to GitHub (which uses HTTPS normally).
 argocd repo add "$REPO_URL" --insecure
 
-# For a PRIVATE repository, you must provide credentials:
-# read -r -p "GitHub username: " GH_USER
-# read -r -s -p "GitHub PAT (repo read): " GH_PAT; echo
-# argocd repo add "$REPO_URL" --username "$GH_USER" --password "$GH_PAT" --insecure
-# unset GH_USER GH_PAT
+kill $PF_PID 2>/dev/null || true
+```
+
+### 7.3 Private repository — deploy key setup
+
+> **Why not your personal SSH key or YubiKey?** ArgoCD runs as a pod inside
+> the cluster. It has no access to hardware security keys (YubiKey, etc.) on
+> your USB bus, and sharing your personal private key with a cluster process
+> is poor practice. The standard pattern is a **GitHub Deploy Key**: a plain
+> software SSH keypair that is:
+> - **Read-only** — can clone and pull, cannot push
+> - **Scoped to one repo** — not your entire GitHub account
+> - **Stored as a Kubernetes Secret** in the `argocd` namespace
+>
+> Your personal YubiKey-backed SSH key handles your `git push`. ArgoCD gets
+> its own separate key. These are two completely independent identities.
+
+```bash
+# WHAT: generate a dedicated SSH keypair for ArgoCD — no passphrase so ArgoCD
+# can use it non-interactively. Ed25519 is the modern, compact algorithm.
+# SECURITY: this key has read-only access to one repo. It is NOT backed by
+# hardware. That is intentional — the cluster needs to use it unattended.
+ssh-keygen -t ed25519 -C "argocd@register-dev" -f ~/.ssh/argocd_deploy_key -N ""
+
+# WHAT: print the PUBLIC key. Copy this — you will paste it into GitHub.
+cat ~/.ssh/argocd_deploy_key.pub
+```
+
+Add the public key to GitHub:
+
+1. Go to `https://github.com/risquanter/register-infra` → **Settings** → **Deploy keys** → **Add deploy key**
+2. Title: `argocd-local-dev`
+3. Paste the public key
+4. Leave **Allow write access** unchecked — ArgoCD only needs read access
+5. Click **Add key**
+
+```bash
+# WHAT: tell ArgoCD about this repo using the SSH URL (not HTTPS) and the
+# deploy key. ArgoCD stores the key as a Secret in the argocd namespace.
+# --ssh-private-key-path: path to the private key on your machine — ArgoCD
+#   reads it once now and stores it in the cluster. You can delete it locally
+#   afterwards if you want.
+# --insecure-skip-server-verification: skips verification of the ArgoCD server
+#   TLS cert (same as --insecure above — we're on localhost via port-forward).
+SSH_REPO_URL="git@github.com:risquanter/register-infra.git"
+
+kubectl -n argocd port-forward svc/argocd-server 9090:80 &
+PF_PID=$!
+sleep 3
+
+argocd login localhost:9090 --username admin --insecure
+
+argocd repo add "$SSH_REPO_URL" \
+  --ssh-private-key-path ~/.ssh/argocd_deploy_key \
+  --insecure-skip-server-verification
 
 kill $PF_PID 2>/dev/null || true
+
+# WHAT: after ArgoCD has read the key, you can optionally remove it from disk.
+# The private key is now stored as a Kubernetes Secret in the argocd namespace.
+# rm ~/.ssh/argocd_deploy_key
+```
+
+Now update the Application manifests to use the SSH URL, and push:
+
+```bash
+# WHAT: the manifests in infra/argocd/apps/ currently reference the HTTPS URL
+# set in §7.1. ArgoCD will reject them if the registered credential is SSH.
+# Update all manifests that point at this repo to the SSH URL.
+sed -i "s|https://github.com/risquanter/register-infra|git@github.com:risquanter/register-infra.git|g" \
+  infra/argocd/apps/root.yaml \
+  infra/argocd/apps/namespaces.yaml \
+  infra/argocd/apps/register.yaml \
+  infra/argocd/apps/mesh-policy.yaml \
+  infra/argocd/apps/opa.yaml
+
+git add infra/argocd/apps/
+git commit -m "chore: switch ArgoCD app manifests to SSH repo URL"
+git push
 ```
 
 ---
@@ -1315,6 +1393,91 @@ kubectl -n register get svc                   # service defined?
 kubectl -n register get pods                  # pod running?
 kubectl -n register describe pod <pod-name>   # detailed pod status
 ```
+
+### Istio mTLS errors after laptop sleep (certificate expired)
+
+> **What happens**: ztunnel holds SPIFFE mTLS certificates with a 24h TTL.
+> It renews them automatically — but only while it is running and can reach
+> istiod. When the laptop sleeps, ztunnel is frozen. If the cert expires
+> while sleeping, ztunnel starts rejecting all pod-to-pod connections with
+> `certificate expired` errors. Symptoms: ArgoCD `connection reset by peer`
+> on port 8081, gRPC failures between pods, or any service-to-service call
+> inside a mesh-enrolled namespace failing immediately.
+>
+> How to confirm: check ztunnel logs for the word `expired`:
+
+```bash
+kubectl -n istio-system logs -l app=ztunnel --since=5m | grep expired
+```
+
+> Fix: restart ztunnel so it reconnects to istiod and gets fresh certificates.
+> Then restart the affected pods so they get new identities too.
+
+```bash
+# WHAT: ztunnel is a DaemonSet — it runs one instance per node.
+# Restarting it causes it to reconnect to istiod and re-fetch all SPIFFE certs.
+kubectl -n istio-system rollout restart daemonset/ztunnel
+kubectl -n istio-system rollout status daemonset/ztunnel --timeout=60s
+
+# WHAT: restart any pods that had connections rejected due to expired certs.
+# Their in-kernel iptables interception rules are rebuilt on pod start.
+kubectl -n argocd rollout restart deployment/argocd-server deployment/argocd-repo-server
+kubectl -n argocd rollout status deployment/argocd-server --timeout=60s
+kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=60s
+```
+
+> **Make this a habit after any long sleep**: if you put the laptop to sleep
+> for more than a few hours and then see strange connection errors inside the
+> cluster, run the ztunnel restart above before investigating further.
+
+### CoreDNS fails to resolve external names after sleep (`server misbehaving`)
+
+> **What happens**: k3d runs CoreDNS inside the cluster to handle DNS for
+> pods. CoreDNS forwards external lookups (e.g. `github.com`) to the
+> nameservers it reads from `/etc/resolv.conf` on the node — which is the
+> k3s container, not your host. After a laptop sleep/wake, your host's DNS
+> resolver (systemd-resolved) may have changed upstream servers or lost
+> state, and the k3d container's view of DNS does not update automatically.
+> Symptom: `argocd repo add` fails with `lookup github.com: server misbehaving`.
+>
+> Fix: restart CoreDNS so it re-reads `/etc/resolv.conf` from the node.
+
+```bash
+# WHAT: CoreDNS is a Deployment in kube-system.
+# Restarting it forces it to re-read the node's /etc/resolv.conf and
+# pick up the current upstream nameservers from systemd-resolved.
+kubectl -n kube-system rollout restart deployment/coredns
+kubectl -n kube-system rollout status deployment/coredns --timeout=60s
+
+# VERIFICATION: DNS should now resolve from inside the cluster.
+kubectl run dnstest --rm -i --restart=Never --image=busybox --timeout=15s \
+  -- nslookup github.com
+```
+
+> If the DNS test still fails, the root cause is that the k3d node container's
+> `/etc/resolv.conf` points to the Docker bridge (`172.18.0.1`), which proxies
+> to your host's `systemd-resolved`, which has no upstream nameservers after
+> sleep. The most reliable fix for a dev laptop is to make CoreDNS forward
+> directly to a public resolver instead of through this fragile chain:
+>
+> ```bash
+> # WHAT: patch CoreDNS to forward external DNS queries to Google's public
+> # resolver (8.8.8.8) directly, bypassing the Docker bridge → systemd-resolved
+> # chain that breaks after sleep.
+> # WHY THIS IS FINE LOCALLY: on a dev laptop the DNS chain through Docker
+> # is unreliable after sleep/network changes. Google's DNS is stable.
+> # In production (Hetzner), the VM's /etc/resolv.conf has real upstreams —
+> # this patch is not needed there.
+> kubectl -n kube-system get configmap coredns -o yaml \
+>   | sed 's|forward . /etc/resolv.conf|forward . 8.8.8.8 8.8.4.4|' \
+>   | kubectl apply -f -
+> kubectl -n kube-system rollout restart deployment/coredns
+> kubectl -n kube-system rollout status deployment/coredns --timeout=60s
+> ```
+>
+> This change does not persist across `k3d cluster delete` + recreate — k3d
+> recreates the CoreDNS ConfigMap from scratch each time. Add this patch to the
+> cluster bootstrap sequence if you recreate the cluster frequently.
 
 ---
 
