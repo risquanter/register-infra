@@ -155,6 +155,36 @@ spec:
         - protocol: TCP
           port: 8080
 ---
+# Allow kubelet health probes to reach the OPA diagnostic port (8282).
+#
+# SECURITY NOTE: standard NetworkPolicy cannot select the kubelet by source —
+# it runs on the node host network, not inside any pod. CiliumNetworkPolicy's
+# fromEntities: host targets exactly the local node process (kubelet), closing
+# the gap that a standard NetworkPolicy would leave open to all cluster pods.
+#
+# WHY NOT standard NetworkPolicy with open `from:`?
+# Port 8282 also serves /metrics (Prometheus), which leaks OPA decision rates,
+# latency, and error counts. Opening it to any pod violates the principle of
+# least privilege and contradicts ADR-INFRA-004 (targeted allow rules only).
+#
+# DEPENDENCY: requires Cilium CNI (already the cluster's CNI — no new dependency).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-opa-healthcheck
+  namespace: register
+spec:
+  endpointSelector:
+    matchLabels:
+      app: opa
+  ingress:
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8282"
+              protocol: TCP
+---
 # Allow DNS egress for all register pods (app, OPA, waypoint).
 # Required for Kubernetes service discovery (e.g., resolving
 # postgresql-postgresql.infra.svc.cluster.local).
