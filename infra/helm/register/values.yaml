@@ -1,11 +1,11 @@
 image:
-  repository: ghcr.io/<org>/<image>
+  repository: register-server
   # tag is written by ArgoCD Image Updater on each new GHCR push.
-  # "0.0.0" is a deliberate placeholder — no image with this tag exists.
-  # The pod stays in ImagePullBackOff until Image Updater commits the real
-  # digest. For local dev, override with: --set image.tag=local
-  tag: "0.0.0"
-  pullPolicy: IfNotPresent
+  # For local dev, the image is built from ~/projects/register and imported
+  # into k3d with: k3d image import register-server:local -c register-dev
+  # In production, Image Updater will overwrite this with the real GHCR digest.
+  tag: "local"
+  pullPolicy: Never
 
 # Number of application replicas.
 # Single-node cluster: 1 is sufficient. Increase when moving to multi-node.
@@ -50,8 +50,9 @@ env:
     value: "http://keycloak.infra.svc.cluster.local/realms/register"
 
 # imagePullSecrets references the GHCR pull secret created during bootstrap.
-imagePullSecrets:
-  - name: ghcr-pull
+# Disabled for local dev (image pre-imported via k3d image import).
+# Re-enable with ghcr-pull when deploying from GHCR.
+imagePullSecrets: []
 
 serviceAccount:
   name: register-runtime
