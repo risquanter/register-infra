@@ -157,17 +157,21 @@ spec:
 ---
 # Allow kubelet health probes to reach the OPA diagnostic port (8282).
 #
-# SECURITY NOTE: standard NetworkPolicy cannot select the kubelet by source —
-# it runs on the node host network, not inside any pod. CiliumNetworkPolicy's
-# fromEntities: host targets exactly the local node process (kubelet), closing
-# the gap that a standard NetworkPolicy would leave open to all cluster pods.
+# SECURITY NOTE: In Istio ambient mode, ztunnel uses SNAT to rewrite the source
+# of kubelet health probes to 169.254.7.127 (a well-known link-local address)
+# before they enter the pod's network namespace. This causes Cilium to see the
+# probe as identity "world" instead of "host", so fromEntities: host does not
+# match. fromCIDR: 169.254.7.127/32 targets exactly the ztunnel probe SNAT
+# address — only traffic that ztunnel has already identified as a health probe
+# reaches OPA on port 8282 via this path.
 #
-# WHY NOT standard NetworkPolicy with open `from:`?
-# Port 8282 also serves /metrics (Prometheus), which leaks OPA decision rates,
-# latency, and error counts. Opening it to any pod violates the principle of
-# least privilege and contradicts ADR-INFRA-004 (targeted allow rules only).
+# Defense-in-depth layers on port 8282:
+#   1. ztunnel SNAT: only local kubelet probes are rewritten to 169.254.7.127
+#   2. CiliumNetworkPolicy: only 169.254.7.127 is allowed to reach 8282
+#   3. PeerAuthentication (opa-diag-permissive): port 8282 accepts plaintext
+#   4. No Service exposes 8282 — cluster-external access is impossible
 #
-# DEPENDENCY: requires Cilium CNI (already the cluster's CNI — no new dependency).
+# DEPENDENCY: requires Cilium CNI + Istio ambient mode (both already in use).
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -178,8 +182,8 @@ spec:
     matchLabels:
       app: opa
   ingress:
-    - fromEntities:
-        - host
+    - fromCIDR:
+        - 169.254.7.127/32
       toPorts:
         - ports:
             - port: "8282"
