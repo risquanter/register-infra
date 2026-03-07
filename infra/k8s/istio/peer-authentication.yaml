@@ -53,8 +53,9 @@ spec:
 # STRICT via the namespace-wide policy above.
 #
 # Network-level access control on 8282 is still enforced by CiliumNetworkPolicy
-# (fromEntities: host — kubelet only). This is defense-in-depth: ztunnel
-# permits the plaintext probe, Cilium restricts who can send it.
+# (fromCIDR: 169.254.7.127/32 — the ztunnel probe SNAT address). This is
+# defense-in-depth: ztunnel permits the plaintext probe, Cilium restricts who
+# can send it.
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:

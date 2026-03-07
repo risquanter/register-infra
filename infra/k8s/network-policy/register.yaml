@@ -170,6 +170,8 @@ spec:
 #   2. CiliumNetworkPolicy: only 169.254.7.127 is allowed to reach 8282
 #   3. PeerAuthentication (opa-diag-permissive): port 8282 accepts plaintext
 #   4. No Service exposes 8282 — cluster-external access is impossible
+#   5. OPA's diagnostic port also serves /metrics (Prometheus), but only the
+#      ztunnel-SNATted kubelet can reach 8282, and it never requests /metrics
 #
 # DEPENDENCY: requires Cilium CNI + Istio ambient mode (both already in use).
 apiVersion: cilium.io/v2

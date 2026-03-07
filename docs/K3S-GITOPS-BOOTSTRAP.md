@@ -296,6 +296,83 @@ git commit -m "chore: add SOPS config and encrypted secrets (dual-recipient)"
 > decrypt `cluster-age-key.enc.yaml` — you would need to re-create all
 > secrets from scratch.
 
+### 1.6 Application-specific database credentials (future — when PG is wired in)
+
+> **Skip this section now.** The register app currently uses in-memory storage
+> (`TrieMap` / `Ref[Map]`). This section documents the credential strategy for
+> when `WorkspaceStorePostgres` is implemented. It is here so the design is
+> recorded alongside the secret creation steps.
+
+The `postgres-credentials` Secret in the `infra` namespace contains two keys:
+
+| Key | Who uses it | Purpose |
+|---|---|---|
+| `postgres-password` | Bitnami PostgreSQL chart | Sets the `postgres` superuser password on DB init |
+| `keycloak-db-password` | Bitnami Keycloak chart | Connects as `bn_keycloak` to the `keycloak` database |
+
+**The register app must NOT use either of these keys.** The superuser password
+grants full DDL/DML over all databases, and the Keycloak password is scoped to
+a different database and user. Using them would violate least-privilege and
+create a cross-service credential coupling.
+
+Instead, when the register app needs PostgreSQL, create a **separate
+SOPS-encrypted Secret** scoped to the `register` namespace:
+
+```bash
+sops infra/secrets/register-db.enc.yaml
+```
+
+Example content:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: register-db-credentials
+  namespace: register            # ← lives in the app namespace, not infra
+type: Opaque
+stringData:
+  # Password for the dedicated register_app PostgreSQL role.
+  # This role is created by an initdb script in the PostgreSQL chart
+  # (auth.username / auth.database configuration).
+  register-db-password: "REPLACE_WITH_STRONG_PASSWORD"
+```
+
+Then add the corresponding PostgreSQL `initdb` configuration to
+[postgresql.yaml](../infra/argocd/apps/postgresql.yaml):
+
+```yaml
+# Inside valuesObject:
+auth:
+  existingSecret: postgres-credentials
+  secretKeys:
+    adminPasswordKey: postgres-password
+  # Create a dedicated role for the register app (least-privilege).
+  # The Bitnami chart auto-creates this user with GRANT on the specified DB.
+  username: register_app
+  password: ""                              # read from initdbScriptsSecret
+  database: register_app
+```
+
+And reference it in the register Helm chart's `values.yaml`:
+
+```yaml
+env:
+  - name: DB_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: register-db-credentials       # ← register namespace Secret
+        key: register-db-password
+```
+
+> **Why two SOPS files instead of one?** Kubernetes Secrets are namespace-scoped.
+> The `infra` namespace cannot read a Secret from `register` and vice versa.
+> The password value is the same in both files (the `initdb` script and the app
+> must agree), but it is expressed as two SOPS-encrypted manifests targeting
+> different namespaces. This is the cleanest GitOps-native approach — no
+> external secret operator, no cross-namespace RBAC, no reflector. See
+> [ADR-INFRA-006](adr/ADR-INFRA-006.md) for the decision rationale.
+
 ---
 
 ## 2) Hetzner Cloud setup

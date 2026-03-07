@@ -34,18 +34,14 @@ ingress:
 
 # Environment variables injected into the application container.
 # Sensitive values should reference a Kubernetes Secret, not be set inline.
+#
+# DB_* variables are NOT included here. The register app currently uses
+# in-memory storage (TrieMap). When WorkspaceStorePostgres is implemented
+# (enterprise persistence tier), add DB_* env vars here referencing a
+# dedicated register-db-credentials Secret in the register namespace —
+# NOT the postgres-credentials Secret in infra (that holds the superuser
+# and Keycloak passwords). See ADR-INFRA-006 for the credential strategy.
 env:
-  - name: DB_HOST
-    value: "postgresql-postgresql.infra.svc.cluster.local"
-  - name: DB_PORT
-    value: "5432"
-  - name: DB_NAME
-    value: "register_app"
-  - name: DB_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: postgres-credentials
-        key: postgres-password
   - name: KEYCLOAK_ISSUER
     value: "http://keycloak.infra.svc.cluster.local/realms/register"
 
