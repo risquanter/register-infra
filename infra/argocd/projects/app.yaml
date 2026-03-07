@@ -10,7 +10,7 @@ spec:
     or deploy outside register.
 
   sourceRepos:
-    - "https://github.com/<org>/register-infra"
+    - "git@github.com:risquanter/register-infra.git"
 
   # No cluster-scoped resources allowed.
   clusterResourceWhitelist: []

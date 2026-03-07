@@ -12,7 +12,7 @@ spec:
 
   # Only the infra repo is a valid source.
   sourceRepos:
-    - "https://github.com/<org>/register-infra"
+    - "git@github.com:risquanter/register-infra.git"
 
   # Cluster-scoped resources this project may create.
   clusterResourceWhitelist:

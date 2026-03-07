@@ -12,7 +12,7 @@ spec:
   # The infra repo is also allowed (for future local charts).
   sourceRepos:
     - "https://charts.bitnami.com/bitnami"
-    - "https://github.com/<org>/register-infra"
+    - "git@github.com:risquanter/register-infra.git"
 
   # No cluster-scoped resources allowed.
   clusterResourceWhitelist: []
