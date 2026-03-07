@@ -40,3 +40,30 @@ metadata:
 spec:
   mtls:
     mode: STRICT
+---
+# OPA diagnostic port — allow plaintext kubelet health probes.
+#
+# In ambient mode, ztunnel enforces PeerAuthentication at the pod network
+# namespace. STRICT mode rejects the kubelet's plaintext HTTP probes on port
+# 8282 (the OPA /health endpoint). The sidecar-era annotation
+# traffic.istio.io/excludeInboundPorts has no effect in ambient mode.
+#
+# This workload-scoped PeerAuthentication overrides only port 8282 on OPA pods
+# to PERMISSIVE (accepts both plaintext and mTLS). All other ports remain
+# STRICT via the namespace-wide policy above.
+#
+# Network-level access control on 8282 is still enforced by CiliumNetworkPolicy
+# (fromEntities: host — kubelet only). This is defense-in-depth: ztunnel
+# permits the plaintext probe, Cilium restricts who can send it.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: opa-diag-permissive
+  namespace: register
+spec:
+  selector:
+    matchLabels:
+      app: opa
+  portLevelMtls:
+    8282:
+      mode: PERMISSIVE

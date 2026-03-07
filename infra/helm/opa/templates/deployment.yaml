@@ -22,14 +22,6 @@ spec:
     metadata:
       labels:
         {{- include "opa.selectorLabels" . | nindent 8 }}
-      annotations:
-        # Exclude the diagnostic port from ztunnel (Istio ambient) interception.
-        # PeerAuthentication STRICT requires mTLS on all intercepted ports, but
-        # the kubelet health probes are plaintext HTTP. Excluding port {{ .Values.opa.diagPort }}
-        # means ztunnel never sees this traffic — it goes directly to the
-        # container. Access control is still enforced by CiliumNetworkPolicy
-        # (fromEntities: host), restricting port {{ .Values.opa.diagPort }} to the kubelet only.
-        traffic.istio.io/excludeInboundPorts: "{{ .Values.opa.diagPort }}"
     spec:
       # Pod Security — restricted profile (same as rest of register namespace)
       automountServiceAccountToken: false
