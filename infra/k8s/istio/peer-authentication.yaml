@@ -68,3 +68,28 @@ spec:
   portLevelMtls:
     8282:
       mode: PERMISSIVE
+---
+# Register app — allow plaintext kubelet health probes on port 8080.
+#
+# Unlike OPA (which separates gRPC on 9191 from diagnostics on 8282), the
+# register app serves both application traffic and health probes on the same
+# port (8080). PERMISSIVE accepts both:
+#   - mTLS connections from the waypoint proxy (application traffic)
+#   - Plaintext HTTP from the kubelet via ztunnel SNAT (health probes)
+#
+# Network-level access control on 8080 is enforced by:
+#   - Standard NetworkPolicy: only the waypoint can reach 8080 (mTLS path)
+#   - CiliumNetworkPolicy: only 169.254.7.127/32 can reach 8080 (probe path)
+# Together these ensure no unauthorized plaintext access despite PERMISSIVE.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: register-probe-permissive
+  namespace: register
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: register
+  portLevelMtls:
+    8080:
+      mode: PERMISSIVE

@@ -191,6 +191,35 @@ spec:
             - port: "8282"
               protocol: TCP
 ---
+# Allow kubelet health probes to reach the register app on port 8080.
+#
+# Same ztunnel SNAT mechanism as the OPA healthcheck rule above:
+# kubelet probes arrive from 169.254.7.127 after ztunnel SNAT rewrite.
+# The standard NetworkPolicy (allow-ingress-from-waypoint) covers mTLS
+# traffic from the waypoint. This CiliumNetworkPolicy covers the plaintext
+# probe path — the two rules together are the complete ingress allowlist.
+#
+# This does NOT expose application endpoints to arbitrary plaintext callers.
+# Only the kubelet (via ztunnel SNAT) can reach 8080 through this rule.
+# PeerAuthentication (register-probe-permissive) allows plaintext on 8080
+# so ztunnel doesn't reject the probe at the mTLS layer.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-register-healthcheck
+  namespace: register
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: register
+  ingress:
+    - fromCIDR:
+        - 169.254.7.127/32
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+---
 # Allow DNS egress for all register pods (app, OPA, waypoint).
 # Required for Kubernetes service discovery (e.g., resolving
 # postgresql-postgresql.infra.svc.cluster.local).
