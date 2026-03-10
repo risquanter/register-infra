@@ -1,0 +1,56 @@
+# Irmin image — built from risquanter/register repository:
+#   docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/
+#
+# Local dev: import into k3d with:
+#   k3d image import local/irmin:3.11 -c register-dev
+# Production: push to GHCR and let Image Updater manage the tag.
+image:
+  repository: local/irmin
+  tag: "3.11"
+  pullPolicy: Never
+
+# Single replica is acceptable: Irmin is not fail-closed (unlike OPA).
+# The register app degrades to read errors, not silent security failures.
+# Increase when moving to multi-node or when write availability matters.
+replicaCount: 1
+
+# Resource requests and limits.
+# Irmin is I/O-bound (content-addressed store reads/writes).
+# The dev image is ~650 MB; tune memory based on tree working set size.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Irmin GraphQL server configuration.
+irmin:
+  # Data directory inside the container — persistent volume mounted here.
+  dataDir: /data
+  # GraphQL endpoint port (matches EXPOSE in Dockerfile).
+  port: 8080
+  # Git branch to serve (Irmin's main branch, not git repo branch).
+  branch: main
+
+# Persistent storage for Irmin's content-addressed pack files.
+# Without this, all tree data is lost on pod restart.
+persistence:
+  enabled: true
+  # StorageClass: use default (local-path on k3d, default on Hetzner).
+  # Override for production if dedicated storage is needed.
+  storageClass: ""
+  size: 1Gi
+  accessMode: ReadWriteOnce
+
+# imagePullSecrets: same pattern as register chart.
+# Disabled for local dev (image pre-imported via k3d image import).
+imagePullSecrets: []
+
+serviceAccount:
+  name: irmin

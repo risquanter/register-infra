@@ -1,0 +1,9 @@
+apiVersion: v2
+name: irmin
+description: >-
+  Irmin GraphQL server — content-addressed persistence backend for the register
+  application. Provides per-node risk tree storage via GraphQL.
+  Built from risquanter/register (dev/Dockerfile.irmin).
+type: application
+version: 0.1.0
+appVersion: "3.11"

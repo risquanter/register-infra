@@ -1,0 +1,23 @@
+---
+# Irmin Service — the register app reaches Irmin over HTTP (GraphQL)
+# on port {{ .Values.service.port }}.
+# ClusterIP is sufficient: only the register app (same namespace) calls this.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "irmin.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "irmin.labels" . | nindent 4 }}
+spec:
+  # Headless service for StatefulSet (stable DNS: irmin-0.irmin.register.svc).
+  # The register app uses the service name (irmin.register.svc.cluster.local)
+  # which round-robins across pods via kube-proxy / Cilium.
+  clusterIP: None
+  selector:
+    {{- include "irmin.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http-graphql
+      port: {{ .Values.service.port }}
+      targetPort: http-graphql
+      protocol: TCP

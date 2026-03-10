@@ -220,7 +220,7 @@ spec:
             - port: "8080"
               protocol: TCP
 ---
-# Allow DNS egress for all register pods (app, OPA, waypoint).
+# Allow DNS egress for all register pods (app, OPA, waypoint, irmin).
 # Required for Kubernetes service discovery (e.g., resolving
 # postgresql-postgresql.infra.svc.cluster.local).
 apiVersion: networking.k8s.io/v1
@@ -239,3 +239,67 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+---
+# Allow the register application to reach Irmin (GraphQL, same namespace).
+# Irmin is the persistence backend for risk tree data (repositoryType=irmin).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-register-to-irmin
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: register
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: irmin
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow ingress to Irmin from the register application.
+# Only the register app should be able to read/write tree data.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-irmin-from-register
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app: irmin
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: register
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow kubelet health probes to reach Irmin on port 8080.
+# Same ztunnel SNAT mechanism as the OPA and register healthcheck rules:
+# kubelet probes arrive from 169.254.7.127 after ztunnel SNAT rewrite.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-irmin-healthcheck
+  namespace: register
+spec:
+  endpointSelector:
+    matchLabels:
+      app: irmin
+  ingress:
+    - fromCIDR:
+        - 169.254.7.127/32
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP

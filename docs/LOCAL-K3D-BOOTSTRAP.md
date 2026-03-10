@@ -955,6 +955,64 @@ rm ~/.ssh/argocd_deploy_key
 
 ---
 
+## 7.5) Build and import application images
+
+> **Why now?** Step §8 applies the root App-of-Apps, which triggers ArgoCD
+> to deploy every Application — including the register app and its Irmin
+> persistence backend. Both use `imagePullPolicy: Never`, meaning kubelet
+> will not attempt a registry pull. If the images are not pre-loaded into
+> k3d's containerd store, the pods fail with `ErrImageNeverPull` and the
+> ArgoCD Applications report `Degraded`.
+>
+> **The images are built from a separate repository**: `risquanter/register`.
+> This project (`register-infra`) does not contain Dockerfiles for the
+> application — only the Helm charts that deploy it. Clone the application
+> repo first if you haven't already.
+
+```bash
+# ── Clone the application repository (skip if already cloned) ──
+cd ~/projects
+git clone git@github.com:risquanter/register.git
+cd ~/projects/register
+
+# ── Build the Irmin GraphQL server image ──
+# WHAT: Alpine-based OCaml image with irmin-cli, irmin-graphql, irmin-pack.
+# First build takes 15–40 min (opam compiles from source). Subsequent builds
+# use the Docker layer cache and finish in seconds.
+docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/
+
+# ── Build the register application image ──
+# WHAT: GraalVM native-image on distroless. Uses docker-compose build target.
+docker compose build register-server
+
+# ── Tag the register image to match the Helm chart expectation ──
+# docker-compose produces register-server:native.
+# The Helm chart (values.yaml) expects register-server:local.
+docker tag register-server:native register-server:local
+
+# ── Import both images into the k3d cluster ──
+# WHAT: loads the images directly into k3d's containerd image store.
+# No registry is involved. This is the only way to update images when
+# imagePullPolicy is set to Never.
+cd ~/projects/register-infra
+k3d image import register-server:local -c register-dev
+k3d image import local/irmin:3.11 -c register-dev
+```
+
+> **After rebuilds**: repeat the tag + import + rollout restart cycle:
+> ```bash
+> cd ~/projects/register
+> docker compose build register-server
+> docker tag register-server:native register-server:local
+> cd ~/projects/register-infra
+> k3d image import register-server:local -c register-dev
+> k3d image import local/irmin:3.11 -c register-dev
+> kubectl -n register rollout restart deployment/register
+> kubectl -n register rollout restart statefulset/irmin
+> ```
+
+---
+
 ## 8) Apply root App-of-Apps — the handoff moment
 
 > **This is the single most important command in the entire guide.**
@@ -984,6 +1042,7 @@ ArgoCD will now discover and deploy these Applications automatically:
 | `postgresql` | PostgreSQL database in `infra` namespace | Bitnami Helm chart (remote) |
 | `keycloak` | Keycloak identity provider in `infra` namespace | Bitnami Helm chart (remote) |
 | `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
+| `irmin` | Irmin GraphQL persistence backend (StatefulSet + PVC) in `register` namespace | `infra/helm/irmin/` |
 | `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
 | `register` | Application Deployment in `register` namespace | `infra/helm/register/` |
 
@@ -1009,6 +1068,7 @@ argocd app list
 argocd app wait namespaces --health --timeout 60
 argocd app wait postgresql --health --timeout 300
 argocd app wait keycloak --health --timeout 300
+argocd app wait irmin --health --timeout 120
 argocd app wait mesh-policy --health --timeout 60
 
 kill $PF_PID 2>/dev/null || true
@@ -1258,32 +1318,46 @@ described there at [The automated deploy loop](GITOPS-OPERATIONS.md#the-automate
 
 ---
 
-## 13) Loading your application image (no GHCR needed locally)
+## 13) Rebuilding and re-importing application images
 
-> **What is this about?** In production, your CI pipeline builds a Docker
-> image, pushes it to GHCR (GitHub Container Registry), and ArgoCD Image
-> Updater detects the new version. Locally, you skip the registry entirely —
-> `k3d image import` loads the image directly into the cluster.
+> **When do you need this?** After changing application code in
+> `risquanter/register` and rebuilding. The initial build + import is
+> covered in §7.5. This section is the fast-iteration loop.
+>
+> **Images are built from a separate repository**: `risquanter/register`
+> (already cloned in §7.5). This project (`register-infra`) does NOT
+> contain Dockerfiles — only the Helm charts that deploy the images.
+>
+> **Image inventory (both built from `~/projects/register`):**
+>
+> | Image | Build command (from `~/projects/register`) | Helm chart | k3d name |
+> |-------|-------------------------------------------|------------|----------|
+> | register-server | `docker compose build register-server` then `docker tag register-server:native register-server:local` | `infra/helm/register/` | `register-server:local` |
+> | irmin | `docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/` | `infra/helm/irmin/` | `local/irmin:3.11` |
+>
+> Both Helm charts use `pullPolicy: Never` — kubelet will never attempt
+> a registry pull. `k3d image import` is the only way to update images
+> in the cluster.
 
 ```bash
-# WHAT: build your application Docker image on your host machine.
-docker build -t ghcr.io/risquanter/<image>:dev .
+# ── Rebuild, re-import, and restart ──
+cd ~/projects/register
 
-# WHAT: import the image into k3d. This makes it available to pods without
-# pulling from any registry.
-k3d image import ghcr.io/risquanter/<image>:dev -c register-dev
+# WHAT: rebuild whichever image changed.
+docker compose build register-server
+docker tag register-server:native register-server:local
+# docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/  # if irmin changed
+
+# WHAT: import into k3d and restart the workload.
+cd ~/projects/register-infra
+k3d image import register-server:local -c register-dev
+# k3d image import local/irmin:3.11 -c register-dev  # if irmin changed
+
+kubectl -n register rollout restart deployment/register
+kubectl -n register rollout status deployment/register --timeout=60s
+# kubectl -n register rollout restart statefulset/irmin  # if irmin changed
+# kubectl -n register rollout status statefulset/irmin --timeout=60s
 ```
-
-Update `infra/helm/register/values.yaml` to use the `dev` tag:
-
-```yaml
-image:
-  repository: ghcr.io/risquanter/<image>
-  tag: dev
-  pullPolicy: IfNotPresent
-```
-
-Commit and push — ArgoCD deploys it.
 
 ---
 
@@ -1419,6 +1493,9 @@ kubectl -n kube-system rollout restart deployment/coredns
 kubectl -n kube-system rollout status deployment/coredns --timeout=60s
 
 # VERIFICATION: DNS should now resolve from inside the cluster.
+# NOTE: --rm only deletes the pod on clean exit. If DNS is broken and nslookup
+# times out, the pod stays behind. Always clean up first to avoid AlreadyExists.
+kubectl delete pod dnstest --ignore-not-found
 kubectl run dnstest --rm -i --restart=Never --image=busybox --timeout=15s \
   -- nslookup github.com
 ```
@@ -1447,6 +1524,46 @@ kubectl run dnstest --rm -i --restart=Never --image=busybox --timeout=15s \
 > This change does not persist across `k3d cluster delete` + recreate — k3d
 > recreates the CoreDNS ConfigMap from scratch each time. Add this patch to the
 > cluster bootstrap sequence if you recreate the cluster frequently.
+
+### Cilium stale `CiliumEndpoint` ownership after sleep (`controller sync-to-k8s-ciliumendpoint is failing`)
+
+> **What happens**: k3d nodes are Docker containers. After a laptop sleep/wake,
+> Docker's bridge network sometimes reassigns IPs to the containers — the node
+> that was `172.18.0.2` becomes `172.18.0.3` or vice versa. Each Cilium agent
+> stamps its node IP into the `CiliumEndpoint` (CEP) objects it creates. After
+> an IP shift, the agent on the new IP sees a CEP whose embedded `hostIP`
+> belongs to a different address and refuses to take ownership.
+>
+> Symptom (`cilium status` and `kubectl -n kube-system logs -l k8s-app=cilium`):
+> ```
+> controller sync-to-k8s-ciliumendpoint (NNN) is failing since Xm (Yx):
+> endpoint sync cannot take ownership of CEP that is not local:
+>   CEP's pod "istio-system/istio-cni-node-XXXXX",
+>   pod's hostIP "172.18.0.2", cilium nodeIP "172.18.0.3"
+> ```
+>
+> Fix: delete the stale CEP so Cilium recreates it with the current node IP,
+> then restart the Cilium DaemonSet so all CEPs are rebuilt cleanly.
+
+```bash
+# WHAT: Delete the stale CiliumEndpoint. Cilium will recreate it immediately
+# with the correct node IP. The pod itself is unaffected.
+kubectl delete cep -n istio-system istio-cni-node-$(kubectl -n istio-system get pod -l k8s-app=istio-cni-node -o jsonpath='{.items[0].metadata.name}' 2>/dev/null | sed 's/istio-cni-node-//')
+# Or if the pod name suffix is known:
+# kubectl delete cep -n istio-system istio-cni-node-<suffix>
+
+# WHAT: Restart the Cilium DaemonSet so it re-registers all endpoints
+# from scratch with the current node IPs.
+kubectl -n kube-system rollout restart daemonset/cilium
+kubectl -n kube-system rollout status daemonset/cilium --timeout=120s
+
+# VERIFY: Should show 0 errors.
+cilium status
+```
+
+> This error is cosmetic in isolation (data-plane is unaffected — Cilium still
+> enforces policy). However it indicates stale cluster state and should be
+> resolved before trusting `cilium status` for other diagnostics.
 
 ---
 

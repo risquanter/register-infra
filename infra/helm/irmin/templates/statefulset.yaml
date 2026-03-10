@@ -1,0 +1,113 @@
+---
+# Irmin StatefulSet — content-addressed persistence backend for risk tree data.
+#
+# StatefulSet (not Deployment) because Irmin writes to a persistent volume
+# (/data). StatefulSet guarantees:
+#   - stable network identity (irmin-0, irmin-1, ...)
+#   - ordered, graceful rolling updates
+#   - PVC is retained across pod restarts (no data loss on reschedule)
+#
+# Security: Irmin does not need Kubernetes API access. It only serves GraphQL
+# on port {{ .Values.irmin.port }}. No RBAC required.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "irmin.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "irmin.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "irmin.name" . }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "irmin.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "irmin.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # Pod Security — restricted profile (same as rest of register namespace).
+      # Irmin image runs as uid 1000 (opam user). Set fsGroup so the PVC is
+      # writable by the container without running as root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: irmin
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Override CMD to set port and data root from Helm values.
+          args:
+            - "--port"
+            - "{{ .Values.irmin.port }}"
+            - "--address"
+            - "0.0.0.0"
+            - "--root"
+            - "{{ .Values.irmin.dataDir }}"
+          ports:
+            - name: http-graphql
+              containerPort: {{ .Values.irmin.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.irmin.dataDir }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # Container-level security hardening.
+          # readOnlyRootFilesystem is NOT set because the dev image writes
+          # to /home/opam/.opam during opam exec. The production distroless
+          # image should enable this. See TENSION REPORT below.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+          # Health check: GraphQL introspection query (same as Dockerfile HEALTHCHECK).
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "wget -q -O - --post-data='{\"query\":\"{ __typename }\"}' --header='Content-Type: application/json' http://127.0.0.1:{{ .Values.irmin.port }}/graphql | grep -q data"
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "wget -q -O - --post-data='{\"query\":\"{ __typename }\"}' --header='Content-Type: application/json' http://127.0.0.1:{{ .Values.irmin.port }}/graphql | grep -q data"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 10
+
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

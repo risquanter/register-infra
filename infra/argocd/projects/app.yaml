@@ -19,7 +19,7 @@ spec:
     - server: https://kubernetes.default.svc
       namespace: register
 
-  # Only the resource kinds the register Helm chart creates.
+  # Resource kinds the register and irmin Helm charts create.
   namespaceResourceWhitelist:
     - group: ""
       kind: ConfigMap
@@ -27,5 +27,9 @@ spec:
       kind: Service
     - group: ""
       kind: ServiceAccount
+    - group: ""
+      kind: PersistentVolumeClaim
     - group: apps
       kind: Deployment
+    - group: apps
+      kind: StatefulSet

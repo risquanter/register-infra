@@ -36,14 +36,23 @@ ingress:
 # Sensitive values should reference a Kubernetes Secret, not be set inline.
 #
 # DB_* variables are NOT included here. The register app currently uses
-# in-memory storage (TrieMap). When WorkspaceStorePostgres is implemented
-# (enterprise persistence tier), add DB_* env vars here referencing a
-# dedicated register-db-credentials Secret in the register namespace —
-# NOT the postgres-credentials Secret in infra (that holds the superuser
-# and Keycloak passwords). See ADR-INFRA-006 for the credential strategy.
+# Irmin for risk tree persistence (repositoryType=irmin) and in-memory
+# for workspace metadata (TrieMap). When WorkspaceStorePostgres is
+# implemented (enterprise persistence tier), add DB_* env vars here
+# referencing a dedicated register-db-credentials Secret in the register
+# namespace — NOT the postgres-credentials Secret in infra (that holds
+# the superuser and Keycloak passwords). See ADR-INFRA-006.
 env:
   - name: KEYCLOAK_ISSUER
     value: "http://keycloak.infra.svc.cluster.local/realms/register"
+  # Persistence: Irmin content-addressed backend for risk tree data.
+  # The register app selects the repository implementation via this config.
+  # Default in application.conf is "in-memory"; override to "irmin" for k8s.
+  - name: REGISTER_REPOSITORY_TYPE
+    value: "irmin"
+  # Irmin URL: the irmin Service in the same namespace (register).
+  - name: IRMIN_URL
+    value: "http://irmin.register.svc.cluster.local:8080"
 
 # imagePullSecrets references the GHCR pull secret created during bootstrap.
 # Disabled for local dev (image pre-imported via k3d image import).

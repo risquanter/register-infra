@@ -77,6 +77,43 @@ for the full annotated tree (kept in one place to avoid drift between guides).
 
 ---
 
+## Prerequisites — container images
+
+> **Unlike the local k3d workflow** (where images are built on your machine and
+> imported with `k3d image import`), a remote k3s cluster must **pull** images
+> from a container registry. This guide assumes images are hosted on **GHCR**
+> (GitHub Container Registry).
+
+The following application images must be available before §4 (ArgoCD sync):
+
+| Image | Source | Description |
+|---|---|---|
+| `ghcr.io/risquanter/register-server` | `risquanter/register` repo | Register application (GraalVM native distroless) |
+| `ghcr.io/risquanter/irmin` | `risquanter/register` repo | Irmin content-addressed store (GraphQL API) |
+
+**Outstanding work required (not yet implemented):**
+
+1. **GitHub Actions CI/CD pipeline** — build both images on push to `main`,
+   tag as `:git-sha` (and optionally `:latest`), push to GHCR.
+   Tracked in AUTHORIZATION-PLAN.md phase K.2.
+2. **GHCR authentication** — if the GHCR packages are private, the cluster
+   needs an `imagePullSecret`. Create a GitHub PAT with `read:packages` scope,
+   store it as a SOPS-encrypted Kubernetes Secret, and reference it in the
+   Helm values (`imagePullSecrets`).
+3. **Helm values overrides for production** — each chart's `values.yaml`
+   currently targets local images (`pullPolicy: Never`). Production needs:
+   - `register`: `image.repository: ghcr.io/risquanter/register-server`,
+     `image.pullPolicy: IfNotPresent`
+   - `irmin`: `image.repository: ghcr.io/risquanter/irmin`,
+     `image.pullPolicy: IfNotPresent`
+4. **ArgoCD Image Updater** (optional) — auto-detect new image tags in GHCR
+   and update the running workloads.
+
+> Until items 1–3 are complete, ArgoCD will show the `register` and `irmin`
+> Applications as **Degraded** (ImagePullBackOff) after bootstrap.
+
+---
+
 ## 0) Workstation setup
 
 > **These tools run on YOUR machine**, not on the cluster. They talk to Hetzner
@@ -298,7 +335,8 @@ git commit -m "chore: add SOPS config and encrypted secrets (dual-recipient)"
 
 ### 1.6 Application-specific database credentials (future — when PG is wired in)
 
-> **Skip this section now.** The register app currently uses in-memory storage
+> **Skip this section now.** The register app uses Irmin for risk tree
+> persistence (`repositoryType=irmin`) and in-memory for workspace metadata
 > (`TrieMap` / `Ref[Map]`). This section documents the credential strategy for
 > when `WorkspaceStorePostgres` is implemented. It is here so the design is
 > recorded alongside the secret creation steps.
@@ -756,7 +794,7 @@ rm -f kubeconfig.yaml
 |---|---|---|
 | **Secrets at rest** | k3s `--secrets-encryption` (AES-CBC) | Single-node: node compromise = key compromise. Mitigate with disk encryption. |
 | **Secrets in git** | SOPS + age dual-recipient (YubiKey + software key). See [SOPS-YUBIKEY-MODEL.md](SOPS-YUBIKEY-MODEL.md). | YubiKey is the root of trust. Loss of YubiKey = locked out of cluster key and all secrets. |
-| **Container images** | GHCR private registry, digest pinning via Image Updater | Image Updater PAT has `read:packages` scope only. |
+| **Container images** | GHCR private registry, digest pinning via Image Updater. Two application images: `register-server` and `irmin` (both built from `risquanter/register`). | Image Updater PAT has `read:packages` scope only. |
 | **API server access** | Hetzner firewall restricts port 6443 to `operator_cidr` | Must update CIDR when ISP changes your IP. |
 | **SSH access** | Key-only auth, firewall-restricted to `operator_cidr` | No bastion host — direct SSH from operator IP. |
 | **Pod-to-pod traffic** | Istio mTLS (ambient) + NetworkPolicy (Cilium) | ztunnel may break PostgreSQL/Keycloak liveness probes (see below). Rollback file exists. |

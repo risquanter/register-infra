@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: irmin
+  namespace: argocd
+spec:
+  # Irmin is application-level infrastructure — the persistence backend for the
+  # register app. It deploys into the register namespace and is scoped to the
+  # app project (same as register itself).
+  project: app
+  source:
+    repoURL: git@github.com:risquanter/register-infra.git
+    targetRevision: HEAD
+    path: infra/helm/irmin
+    helm:
+      releaseName: irmin
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: register
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

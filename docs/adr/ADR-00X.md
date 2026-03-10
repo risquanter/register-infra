@@ -17,7 +17,7 @@ This meta-ADR defines the structure, style, and content depth for all ADRs.
 ```markdown
 # ADR-NNN: [Concise Decision Title]
 
-**Status:** [Proposed | Accepted | Deprecated | Superseded by ADR-XXX]  
+**Status:** [Proposed | Accepted | Accepted (awaiting implementation)| Deprecated | Superseded by ADR-XXX]
 **Date:** YYYY-MM-DD  
 **Tags:** [3-5 relevant tags]
 ```
@@ -25,6 +25,15 @@ This meta-ADR defines the structure, style, and content depth for all ADRs.
 ### Context (3-5 bullet points)
 **Purpose:** Establish the problem space and constraints.  
 **Style:** Bullet points, not paragraphs. Each point states a core principle or constraint.
+
+**Phrasing:** Describe the inherent trade-offs and constraints that make the problem exist — not the state of any prior or existing implementation. Context must remain valid regardless of what code came before or after.
+
+- ❌ `Current DTOs mix client and server concerns` — describes an implementation snapshot
+- ❌ `The existing approach requires full resubmission` — describes prior code
+- ✅ `A single DTO shape that serves both create and update creates nullable-field ambiguity` — states the principle
+- ✅ `Transmitting full structures on every write is bandwidth-intensive and error-prone` — states the trade-off
+
+Avoid: *current*, *existing*, *previously*, *old approach*, *the old X*. Express the underlying quality attribute or constraint instead.
 
 **Example (from ADR-001):**
 ```markdown
@@ -117,6 +126,27 @@ def computeLEC(nTrials: PositiveInt, depth: NonNegativeInt) = {
 | `RiskTreeService` | Iron types in signatures, no validation |
 ```
 
+### Alternatives Rejected (Optional — Approved Extension)
+**Purpose:** Record options that were explicitly considered and ruled out, so future readers do not re-litigate closed decisions.  
+**Style:** One sub-heading per rejected alternative. Each entry states what the option is, and exactly why it was rejected. Prose is acceptable here (unlike Decision/Code Smells) because trade-off reasoning cannot always be expressed in code.
+
+**Guidelines:**
+- Use `### [Alternative Name]` (not ❌/✅ — those belong in Code Smells)
+- Lead with a one-line **What** description, then a **Why rejected** block
+- Keep each entry to 3-6 lines. Cross-reference the ADR whose principle it violates if applicable
+- Omit if only one option was viable — this section exists only when real alternatives were evaluated
+
+**Example:**
+```markdown
+## Alternatives Rejected
+
+### Reflector operator (emberstack/kubernetes-reflector)
+- **What**: annotate source Secret; operator copies to target namespaces automatically
+- **Why rejected**: requires cluster-wide Secret R/W RBAC — compromised reflector exposes all namespaces. Mirrors the admin credential rather than provisioning a dedicated role, violating least-privilege (ADR-INFRA-004).
+```
+
+> **Schema note:** This section is a deliberate, documented extension to the base ADR schema. It is optional and appears after Implementation, before References. ADRs that capture multi-option decisions (technology choices, operator selection, secret delivery strategies) should include it. ADRs that record a single obvious pattern (e.g., a coding convention) should omit it.
+
 ### References (Optional)
 **Purpose:** External documentation links.  
 **Style:** Bulleted list, 2-4 links maximum.
@@ -134,6 +164,7 @@ def computeLEC(nTrials: PositiveInt, depth: NonNegativeInt) = {
 - Decision: 3-5 patterns with code
 - Code Smells: 3-5 anti-patterns with examples
 - Implementation: 3-6 row table (optional)
+- Alternatives Rejected: per-option sub-headings (optional extension — include when ≥2 real options were evaluated)
 
 ---
 
@@ -144,6 +175,7 @@ def computeLEC(nTrials: PositiveInt, depth: NonNegativeInt) = {
 - **Bullets over paragraphs** - Easy scanning
 - **Concrete over abstract** - Use actual types from codebase
 - **Prescriptive over descriptive** - State what to do, not why it's better
+- **Timeless over historical** - Context states enduring constraints, not implementation snapshots; never reference "current", "existing", or "old" code states
 
 ---
 
@@ -187,4 +219,5 @@ When creating a new ADR:
 3. Show 3-5 Decision patterns with minimal code
 4. Provide 3-5 Code Smells with BAD/GOOD examples
 5. Add Implementation table if helpful
-6. Target 100-200 lines total
+6. Add Alternatives Rejected if ≥2 real options were evaluated (approved optional extension)
+7. Target 100-200 lines total
