@@ -97,7 +97,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: opa
+      app.kubernetes.io/name: opa
   policyTypes:
     - Ingress
   ingress:
@@ -126,7 +126,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app: opa
+              app.kubernetes.io/name: opa
       ports:
         - protocol: TCP
           port: 9191
@@ -182,7 +182,7 @@ metadata:
 spec:
   endpointSelector:
     matchLabels:
-      app: opa
+      app.kubernetes.io/name: opa
   ingress:
     - fromCIDR:
         - 169.254.7.127/32
@@ -257,7 +257,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app: irmin
+              app.kubernetes.io/name: irmin
       ports:
         - protocol: TCP
           port: 8080
@@ -272,7 +272,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: irmin
+      app.kubernetes.io/name: irmin
   policyTypes:
     - Ingress
   ingress:
@@ -295,7 +295,7 @@ metadata:
 spec:
   endpointSelector:
     matchLabels:
-      app: irmin
+      app.kubernetes.io/name: irmin
   ingress:
     - fromCIDR:
         - 169.254.7.127/32

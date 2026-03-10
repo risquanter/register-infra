@@ -15,5 +15,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{- define "irmin.selectorLabels" -}}
-app: {{ include "irmin.name" . }}
+app.kubernetes.io/name: {{ include "irmin.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

@@ -64,7 +64,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: opa
+      app.kubernetes.io/name: opa
   portLevelMtls:
     8282:
       mode: PERMISSIVE

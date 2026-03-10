@@ -14,5 +14,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{- define "opa.selectorLabels" -}}
-app: {{ include "opa.name" . }}
+app.kubernetes.io/name: {{ include "opa.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
