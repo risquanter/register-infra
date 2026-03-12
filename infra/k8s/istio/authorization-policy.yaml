@@ -4,8 +4,27 @@ metadata:
   name: require-jwt
   namespace: register
 spec:
-  # selector: empty applies this policy to all workloads in the namespace
-  selector: {}
+  # targetRef scopes this policy to the waypoint proxy (L7), NOT to individual
+  # pods via selector. This is the correct Istio Ambient pattern for HTTP-level
+  # rules (JWT, paths).
+  #
+  # WHY NOT selector: {}
+  # ztunnel operates at L4 and cannot evaluate HTTP attributes (requestPrincipals,
+  # paths). When an ALLOW policy with only HTTP rules is attached to a pod via
+  # selector, ztunnel silently omits all rules → the policy has zero effective
+  # rules → any workload matched by the selector is in "deny by default" mode at
+  # L4 → all east-west (pod-to-pod) TCP connections in the namespace are blocked.
+  #
+  # HOW THIS INTERACTS WITH SECURITY
+  # With targetRef, ztunnel does not evaluate this policy. L4 enforcement is
+  # provided by PeerAuthentication STRICT (mTLS required for all mesh traffic).
+  # JWT and path enforcement are activated when the waypoint Gateway is deployed
+  # (production / Hetzner phase). In local k3d (no waypoint), no JWT enforcement
+  # is in effect — this is acceptable for dev. See Ambiguity A4 in action plan.
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: waypoint
   action: ALLOW
   rules:
     - # Authenticated routes: require a valid JWT (any principal).
