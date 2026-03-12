@@ -13,6 +13,66 @@ spec:
     - Ingress
     - Egress
 ---
+# Allow Istio Ambient HBONE tunnels between all pods in the register namespace.
+#
+# HOW AMBIENT MODE CHANGES NETWORKPOLICY ENFORCEMENT
+# In Istio Ambient mode, ztunnel intercepts ALL pod-to-pod TCP connections and
+# wraps them in HBONE (HTTP-Based Overlay Network Encapsulation) on port 15008.
+# This is the WIRE PROTOCOL — Cilium sees a TCP connection to port 15008, not to
+# the application's port (8080, 8090, etc.). The application payload is encrypted
+# inside the mTLS HBONE tunnel and invisible to Cilium.
+#
+# Consequence: per-service Cilium NetworkPolicy rules (e.g. allow register→irmin
+# on port 8080) cannot be enforced at the Cilium layer for intra-namespace traffic.
+# Without this HBONE rule, the default-deny-all policy blocks ALL cross-pod TCP
+# connections, as ztunnel's connection attempts (port 15008) are dropped first.
+#
+# WHAT ENFORCES ACCESS CONTROL IN AMBIENT MODE?
+# - L4 (identity):     PeerAuthentication STRICT → ztunnel rejects non-mTLS.
+#                      Every pod gets a SPIFFE certificate; ztunnel verifies it.
+# - L7 (HTTP/JWT):     AuthorizationPolicy targeting the waypoint Gateway.
+#                      Enforced when a waypoint is deployed (production).
+# - L3 (cross-ns):     The per-namespace/per-pod NetworkPolicy rules below are
+#                      still meaningful for CROSS-NAMESPACE traffic (e.g. register
+#                      → postgres in infra namespace), where HBONE is not used.
+#
+# The per-service rules (allow-ingress-irmin-from-register, etc.) are retained
+# as documentation of the intended access topology and will become enforceable
+# when Cilium's native Istio integration (Tetragon / CiliumClusterwideNetworkPolicy
+# with L7 awareness) is added, or via the waypoint.
+#
+# HBONE source IP: ztunnel uses the SOURCE POD's IP for the HBONE connection
+# (so Cilium identity-matching still correlates to the originating pod). On a
+# single-node cluster this is intra-host; on multi-node it is inter-node.
+# Restricting to namespaceSelector: register limits this to intra-namespace
+# ambient traffic only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-hbone-intra-namespace
+  namespace: register
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: register
+      ports:
+        - protocol: TCP
+          port: 15008
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: register
+      ports:
+        - protocol: TCP
+          port: 15008
+---
 # Allow the register application to reach PostgreSQL in the infra namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
