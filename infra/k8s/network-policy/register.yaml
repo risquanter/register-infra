@@ -153,7 +153,7 @@ spec:
               app.kubernetes.io/name: register
       ports:
         - protocol: TCP
-          port: 8080
+          port: 8090
 ---
 # Allow kubelet health probes to reach the OPA diagnostic port (8282).
 #
@@ -191,18 +191,17 @@ spec:
             - port: "8282"
               protocol: TCP
 ---
-# Allow kubelet health probes to reach the register app on port 8080.
+# Allow kubelet health probes to reach the register app on the dedicated health port (8091).
 #
-# Same ztunnel SNAT mechanism as the OPA healthcheck rule above:
+# register-server v2 separates API (8090) from health probes (8091). The
+# ztunnel SNAT mechanism is identical to the OPA healthcheck rule above:
 # kubelet probes arrive from 169.254.7.127 after ztunnel SNAT rewrite.
 # The standard NetworkPolicy (allow-ingress-from-waypoint) covers mTLS
-# traffic from the waypoint. This CiliumNetworkPolicy covers the plaintext
-# probe path — the two rules together are the complete ingress allowlist.
+# traffic from the waypoint to port 8090. This CiliumNetworkPolicy covers
+# the plaintext kubelet probe path on port 8091.
 #
-# This does NOT expose application endpoints to arbitrary plaintext callers.
-# Only the kubelet (via ztunnel SNAT) can reach 8080 through this rule.
-# PeerAuthentication (register-probe-permissive) allows plaintext on 8080
-# so ztunnel doesn't reject the probe at the mTLS layer.
+# PeerAuthentication (register-probe-permissive) sets port 8091 PERMISSIVE
+# so ztunnel does not reject the plaintext probe at the mTLS layer.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -217,7 +216,7 @@ spec:
         - 169.254.7.127/32
       toPorts:
         - ports:
-            - port: "8080"
+            - port: "8091"
               protocol: TCP
 ---
 # Allow DNS egress for all register pods (app, OPA, waypoint, irmin).
@@ -296,6 +295,71 @@ spec:
   endpointSelector:
     matchLabels:
       app.kubernetes.io/name: irmin
+  ingress:
+    - fromCIDR:
+        - 169.254.7.127/32
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+---
+# Allow the Istio waypoint to forward requests to the frontend nginx pod.
+# In production the Istio Gateway routes all external traffic to the frontend.
+# The waypoint is in the ingress path for L7 policy enforcement.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-frontend-from-waypoint
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              gateway.istio.io/managed: istio.io-mesh-controller
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow the frontend nginx pod to call the register API backend.
+# nginx proxies API calls (Accept: application/json) to register:8090.
+# DNS egress is already covered by the namespace-wide allow-egress-dns rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-frontend-to-register
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: register
+      ports:
+        - protocol: TCP
+          port: 8090
+---
+# Allow kubelet health probes to reach the frontend nginx pod on port 8080.
+# Same ztunnel SNAT mechanism as OPA, register, and irmin healthcheck rules.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-frontend-healthcheck
+  namespace: register
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
   ingress:
     - fromCIDR:
         - 169.254.7.127/32

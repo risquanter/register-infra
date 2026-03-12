@@ -36,13 +36,13 @@ spec:
       {{- end }}
 
       # Pod Security — restricted profile (same as rest of register namespace).
-      # Irmin image runs as uid 1000 (opam user). Set fsGroup so the PVC is
-      # writable by the container without running as root.
+      # Irmin prod image runs as uid 65532 (dedicated non-root user, same as
+      # register-server). fsGroup 65532 makes the PVC writable by the container.
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
 
@@ -69,11 +69,13 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
 
           # Container-level security hardening.
-          # readOnlyRootFilesystem is NOT set because the dev image writes
-          # to /home/opam/.opam during opam exec. The production distroless
-          # image should enable this. See TENSION REPORT below.
+          # readOnlyRootFilesystem is enabled: the prod image is a static binary +
+          # Alpine libc only; it writes exclusively to /data (the PVC mount).
+          # The dev image (local/irmin-dev) cannot use this flag (opam writes to
+          # /home/opam/.opam at runtime). Use the prod image in k8s.
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
 

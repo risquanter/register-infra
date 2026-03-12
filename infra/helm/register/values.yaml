@@ -1,10 +1,9 @@
 image:
   repository: register-server
-  # tag is written by ArgoCD Image Updater on each new GHCR push.
-  # For local dev, the image is built from ~/projects/register and imported
-  # into k3d with: k3d image import register-server:local -c register-dev
-  # In production, Image Updater will overwrite this with the real GHCR digest.
-  tag: "local"
+  # tag matches the local prod build: `docker build -f containers/prod/Dockerfile.register-prod -t register-server:prod .`
+  # Import into k3d with: k3d image import register-server:prod -c register-dev
+  # In production (Hetzner), Image Updater will overwrite this with the real GHCR digest.
+  tag: "prod"
   pullPolicy: Never
 
 # Number of application replicas.
@@ -24,7 +23,12 @@ resources:
 
 service:
   type: ClusterIP
-  port: 8080
+  # API port — matches register.server.port in application.conf (REGISTER_SERVER_PORT)
+  port: 8090
+  # Dedicated kubelet health-probe port (REGISTER_HEALTH_PORT).
+  # Separated from API port to allow per-port mTLS: 8090 STRICT, 8091 PERMISSIVE.
+  # See peer-authentication.yaml and ADR-012.
+  healthPort: 8091
 
 # Ingress via Istio Gateway — configure host and TLS here.
 ingress:
@@ -43,8 +47,11 @@ ingress:
 # namespace — NOT the postgres-credentials Secret in infra (that holds
 # the superuser and Keycloak passwords). See ADR-INFRA-006.
 env:
-  - name: KEYCLOAK_ISSUER
-    value: "http://keycloak.infra.svc.cluster.local/realms/register"
+  # Auth mode: capability-only means no JWT/Keycloak required.
+  # KEYCLOAK_ISSUER is intentionally absent — add it via secretKeyRef when
+  # activating jwt-and-capability or jwt-only mode (see ADR-024, AuthConfig).
+  - name: REGISTER_AUTH_MODE
+    value: "capability-only"
   # Persistence: Irmin content-addressed backend for risk tree data.
   # The register app selects the repository implementation via this config.
   # Default in application.conf is "in-memory"; override to "irmin" for k8s.

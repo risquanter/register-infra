@@ -14,3 +14,6 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
+    # Health port is NOT exposed as a Service port — it is accessed by the
+    # kubelet directly on the pod IP. Exposing it would make it reachable
+    # inside the cluster, which contradicts its probe-only purpose.

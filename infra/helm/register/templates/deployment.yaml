@@ -38,6 +38,9 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
 
           # Container-level security hardening
           securityContext:
@@ -55,13 +58,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: http
+              port: health
             initialDelaySeconds: 30
             periodSeconds: 15
 
           readinessProbe:
             httpGet:
               path: /ready
-              port: http
+              port: health
             initialDelaySeconds: 10
             periodSeconds: 10

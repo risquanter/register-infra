@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: frontend
+  namespace: argocd
+spec:
+  # Frontend is application-level — the SPA server for the register UI.
+  # It deploys into the register namespace with the register app.
+  project: app
+  source:
+    repoURL: git@github.com:risquanter/register-infra.git
+    targetRevision: HEAD
+    path: infra/helm/frontend
+    helm:
+      releaseName: frontend
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: register
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

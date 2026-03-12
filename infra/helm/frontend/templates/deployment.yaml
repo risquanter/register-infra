@@ -1,0 +1,89 @@
+---
+# Frontend Deployment — nginx SPA server.
+#
+# Serves the built SPA static assets (index.html, JS, CSS) and applies
+# Accept-header routing on the /w/* capability URL path:
+#   - Accept: text/html → serve index.html (SPA shell)
+#   - Accept: application/json → proxy to register-server:8090 (API)
+#
+# Routing logic lives entirely in the baked-in nginx.conf (ADR-INFRA-007 §1).
+# The Istio Gateway terminates TLS and forwards all traffic here unconditionally.
+#
+# Security: frontend has no Kubernetes API access. ServiceAccount token is not
+# mounted. readOnlyRootFilesystem is true; nginx writes only to /tmp (emptyDir).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "frontend.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "frontend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "frontend.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: frontend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          env:
+            {{- toYaml .Values.env | nindent 12 }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # nginx writes client body temp files, proxy temp files etc to /tmp.
+          # readOnlyRootFilesystem requires an explicit writable emptyDir there.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

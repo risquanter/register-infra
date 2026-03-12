@@ -1,11 +1,11 @@
-# Irmin image — built from risquanter/register repository:
-#   docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/
+# Irmin image — prod build from risquanter/register repository:
+#   docker build -f containers/prod/Dockerfile.irmin-prod -t local/irmin-prod:3.11 .
 #
 # Local dev: import into k3d with:
-#   k3d image import local/irmin:3.11 -c register-dev
+#   k3d image import local/irmin-prod:3.11 -c register-dev
 # Production: push to GHCR and let Image Updater manage the tag.
 image:
-  repository: local/irmin
+  repository: local/irmin-prod
   tag: "3.11"
   pullPolicy: Never
 

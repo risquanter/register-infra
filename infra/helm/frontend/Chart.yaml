@@ -1,0 +1,8 @@
+apiVersion: v2
+name: frontend
+description: nginx SPA frontend for the register application.
+  Serves static assets and applies Accept-header routing for the /w/* capability
+  URL path (ADR-021). See ADR-INFRA-007 for the full serving architecture.
+type: application
+version: 0.1.0
+appVersion: "dev"

@@ -1,0 +1,43 @@
+# Frontend image — built from risquanter/register repository:
+#   docker build -f containers/prod/Dockerfile.frontend-prod -t local/frontend:dev .
+#
+# Local dev: import into k3d with:
+#   k3d image import local/frontend:dev -c register-dev
+# Production: push to GHCR and let Image Updater manage the tag.
+image:
+  repository: local/frontend
+  tag: "dev"
+  pullPolicy: Never
+
+# Single replica is sufficient. The frontend is stateless (all state is in
+# the backend). Scaling requires no coordination.
+replicaCount: 1
+
+# Resource requests and limits.
+# nginx serving static files is extremely lightweight.
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 64Mi
+
+service:
+  type: ClusterIP
+  # nginx listens on 8080 (non-privileged port, uid 101).
+  port: 8080
+
+# Environment injected at container startup via the image entrypoint script.
+# The nginx.conf is baked into the image; BACKEND_URL sets the proxy target
+# for API calls (see ADR-027, Dockerfile.frontend-prod).
+env:
+  - name: BACKEND_URL
+    value: "http://register.register.svc.cluster.local:8090"
+
+# imagePullSecrets: same pattern as register and irmin charts.
+# Disabled for local dev (image pre-imported via k3d image import).
+imagePullSecrets: []
+
+serviceAccount:
+  name: frontend

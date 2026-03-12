@@ -69,18 +69,15 @@ spec:
     8282:
       mode: PERMISSIVE
 ---
-# Register app — allow plaintext kubelet health probes on port 8080.
+# Register app — allow plaintext kubelet health probes on the dedicated health port.
 #
-# Unlike OPA (which separates gRPC on 9191 from diagnostics on 8282), the
-# register app serves both application traffic and health probes on the same
-# port (8080). PERMISSIVE accepts both:
-#   - mTLS connections from the waypoint proxy (application traffic)
-#   - Plaintext HTTP from the kubelet via ztunnel SNAT (health probes)
+# register-server v2 separates the API port (8090, STRICT mTLS) from the
+# health-probe port (8091, PERMISSIVE). This mirrors the OPA pattern:
+#   port 8090 (API)    → PeerAuthentication STRICT (namespace default)
+#   port 8091 (probes) → PeerAuthentication PERMISSIVE (this policy)
 #
-# Network-level access control on 8080 is enforced by:
-#   - Standard NetworkPolicy: only the waypoint can reach 8080 (mTLS path)
-#   - CiliumNetworkPolicy: only 169.254.7.127/32 can reach 8080 (probe path)
-# Together these ensure no unauthorized plaintext access despite PERMISSIVE.
+# Network-level access control on 8091 is enforced by CiliumNetworkPolicy
+# (fromCIDR: 169.254.7.127/32 — the ztunnel probe SNAT address).
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
@@ -90,6 +87,28 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: register
+  portLevelMtls:
+    8091:
+      mode: PERMISSIVE
+---
+# Frontend nginx pod — allow plaintext kubelet health probes on port 8080.
+#
+# nginx serves on port 8080 (non-privileged, uid 101). The kubelet probe
+# arrives via ztunnel SNAT (169.254.7.127) as plaintext. PERMISSIVE on 8080
+# allows the probe while all other traffic to the frontend must present a
+# valid mesh certificate (STRICT namespace default).
+#
+# Network-level access control is enforced by CiliumNetworkPolicy
+# allow-ingress-frontend-healthcheck (fromCIDR: 169.254.7.127/32).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: frontend-probe-permissive
+  namespace: register
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
   portLevelMtls:
     8080:
       mode: PERMISSIVE
