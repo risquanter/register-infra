@@ -958,11 +958,12 @@ rm ~/.ssh/argocd_deploy_key
 ## 7.5) Build and import application images
 
 > **Why now?** Step §8 applies the root App-of-Apps, which triggers ArgoCD
-> to deploy every Application — including the register app and its Irmin
-> persistence backend. Both use `imagePullPolicy: Never`, meaning kubelet
-> will not attempt a registry pull. If the images are not pre-loaded into
-> k3d's containerd store, the pods fail with `ErrImageNeverPull` and the
-> ArgoCD Applications report `Degraded`.
+> to deploy every Application — including the register app, its Irmin
+> persistence backend, and the frontend SPA. All three use
+> `imagePullPolicy: Never`, meaning kubelet will not attempt a registry
+> pull. If the images are not pre-loaded into k3d's containerd store, the
+> pods fail with `ErrImageNeverPull` and the ArgoCD Applications report
+> `Degraded`.
 >
 > **The images are built from a separate repository**: `risquanter/register`.
 > This project (`register-infra`) does not contain Dockerfiles for the
@@ -975,11 +976,12 @@ cd ~/projects
 git clone git@github.com:risquanter/register.git
 cd ~/projects/register
 
-# ── Build the Irmin GraphQL server image ──
-# WHAT: Alpine-based OCaml image with irmin-cli, irmin-graphql, irmin-pack.
-# First build takes 15–40 min (opam compiles from source). Subsequent builds
-# use the Docker layer cache and finish in seconds.
-docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/
+# ── Build the Irmin GraphQL server image (prod variant) ──
+# WHAT: Alpine-based static binary with irmin-cli, irmin-graphql, irmin-pack.
+# Uses Dockerfile.irmin-prod which produces a minimal image (uid 65532,
+# read-only root filesystem). First build takes 15–40 min (opam compiles
+# from source). Subsequent builds use the Docker layer cache.
+docker build -f dev/Dockerfile.irmin-prod -t local/irmin-prod:3.11 dev/
 
 # ── Build the register application image ──
 # WHAT: GraalVM native-image on distroless. Uses docker-compose build target.
@@ -987,28 +989,37 @@ docker compose build register-server
 
 # ── Tag the register image to match the Helm chart expectation ──
 # docker-compose produces register-server:native.
-# The Helm chart (values.yaml) expects register-server:local.
-docker tag register-server:native register-server:local
+# The Helm chart (values.yaml) expects register-server:prod.
+docker tag register-server:native register-server:prod
 
-# ── Import both images into the k3d cluster ──
+# ── Build the frontend SPA image ──
+# WHAT: nginx 1.27.5-alpine-slim serving the built SPA.
+# Uses multi-stage build: Node for the build, nginx for serving.
+docker compose build frontend
+docker tag register-frontend:latest local/frontend:dev
+
+# ── Import all three images into the k3d cluster ──
 # WHAT: loads the images directly into k3d's containerd image store.
 # No registry is involved. This is the only way to update images when
 # imagePullPolicy is set to Never.
 cd ~/projects/register-infra
-k3d image import register-server:local -c register-dev
-k3d image import local/irmin:3.11 -c register-dev
+k3d image import register-server:prod -c register-dev
+k3d image import local/irmin-prod:3.11 -c register-dev
+k3d image import local/frontend:dev -c register-dev
 ```
 
 > **After rebuilds**: repeat the tag + import + rollout restart cycle:
 > ```bash
 > cd ~/projects/register
 > docker compose build register-server
-> docker tag register-server:native register-server:local
+> docker tag register-server:native register-server:prod
 > cd ~/projects/register-infra
-> k3d image import register-server:local -c register-dev
-> k3d image import local/irmin:3.11 -c register-dev
+> k3d image import register-server:prod -c register-dev
+> # k3d image import local/irmin-prod:3.11 -c register-dev  # if irmin changed
+> # k3d image import local/frontend:dev -c register-dev     # if frontend changed
 > kubectl -n register rollout restart deployment/register
-> kubectl -n register rollout restart statefulset/irmin
+> # kubectl -n register rollout restart statefulset/irmin    # if irmin changed
+> # kubectl -n register rollout restart deployment/frontend  # if frontend changed
 > ```
 
 ---
@@ -1044,7 +1055,8 @@ ArgoCD will now discover and deploy these Applications automatically:
 | `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
 | `irmin` | Irmin GraphQL persistence backend (StatefulSet + PVC) in `register` namespace | `infra/helm/irmin/` |
 | `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
-| `register` | Application Deployment in `register` namespace | `infra/helm/register/` |
+| `register` | Application API server (port 8090 API, port 8091 health) in `register` namespace | `infra/helm/register/` |
+| `frontend` | Frontend SPA (nginx, port 8080) in `register` namespace | `infra/helm/frontend/` |
 
 > For the detailed reference (AppProject scoping, security policies, repo
 > layout), see [GITOPS-OPERATIONS.md — What ArgoCD manages](GITOPS-OPERATIONS.md#what-argocd-manages).
@@ -1070,6 +1082,8 @@ argocd app wait postgresql --health --timeout 300
 argocd app wait keycloak --health --timeout 300
 argocd app wait irmin --health --timeout 120
 argocd app wait mesh-policy --health --timeout 60
+argocd app wait frontend --health --timeout 60
+argocd app wait register --health --timeout 120
 
 kill $PF_PID 2>/dev/null || true
 ```
@@ -1211,7 +1225,7 @@ TOKEN=$(curl -s -X POST \
 #   against Keycloak's JWKS and reject this. If it returns 200, the policy
 #   is broken.
 curl -si -H "Authorization: Bearer this.is.not.a.valid.jwt" \
-  http://localhost:8080/health \
+  http://localhost:8090/health \
   | head -1
 # Expected: HTTP/1.1 401 Unauthorized
 ```
@@ -1223,7 +1237,7 @@ curl -si -H "Authorization: Bearer this.is.not.a.valid.jwt" \
 # WHY: the EnvoyFilter strips this header, and the AuthorizationPolicy requires
 #   a valid JWT. The app should never see a forged x-user-id.
 curl -si -H "x-user-id: 00000000-0000-0000-0000-000000000001" \
-  http://localhost:8080/health \
+  http://localhost:8090/health \
   | head -1
 # Expected: HTTP/1.1 401 Unauthorized
 ```
@@ -1235,7 +1249,7 @@ curl -si -H "x-user-id: 00000000-0000-0000-0000-000000000001" \
 # WHY: the waypoint validates it, strips any forged headers, injects the real
 #   x-user-id from the JWT sub claim, and forwards to the app.
 curl -si -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/health \
+  http://localhost:8090/health \
   | head -1
 # Expected: HTTP/1.1 200 OK (once the register app is deployed and running)
 ```
@@ -1254,7 +1268,7 @@ POD_IP=$(kubectl -n register get pods \
 if [ -n "$POD_IP" ]; then
   kubectl run curltest --rm -i --restart=Never \
     --image=curlimages/curl -- \
-    curl -s --connect-timeout 5 "http://${POD_IP}:8080/health" \
+    curl -s --connect-timeout 5 "http://${POD_IP}:8091/health" \
     && echo "FAIL: direct pod access succeeded — NetworkPolicy not enforced" \
     || echo "PASS: direct pod access blocked"
 else
@@ -1328,14 +1342,15 @@ described there at [The automated deploy loop](GITOPS-OPERATIONS.md#the-automate
 > (already cloned in §7.5). This project (`register-infra`) does NOT
 > contain Dockerfiles — only the Helm charts that deploy the images.
 >
-> **Image inventory (both built from `~/projects/register`):**
+> **Image inventory (all built from `~/projects/register`):**
 >
 > | Image | Build command (from `~/projects/register`) | Helm chart | k3d name |
 > |-------|-------------------------------------------|------------|----------|
-> | register-server | `docker compose build register-server` then `docker tag register-server:native register-server:local` | `infra/helm/register/` | `register-server:local` |
-> | irmin | `docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/` | `infra/helm/irmin/` | `local/irmin:3.11` |
+> | register-server | `docker compose build register-server` then `docker tag register-server:native register-server:prod` | `infra/helm/register/` | `register-server:prod` |
+> | irmin | `docker build -f dev/Dockerfile.irmin-prod -t local/irmin-prod:3.11 dev/` | `infra/helm/irmin/` | `local/irmin-prod:3.11` |
+> | frontend | `docker compose build frontend` then `docker tag register-frontend:latest local/frontend:dev` | `infra/helm/frontend/` | `local/frontend:dev` |
 >
-> Both Helm charts use `pullPolicy: Never` — kubelet will never attempt
+> All Helm charts use `pullPolicy: Never` — kubelet will never attempt
 > a registry pull. `k3d image import` is the only way to update images
 > in the cluster.
 
@@ -1345,17 +1360,20 @@ cd ~/projects/register
 
 # WHAT: rebuild whichever image changed.
 docker compose build register-server
-docker tag register-server:native register-server:local
-# docker build -f dev/Dockerfile.irmin -t local/irmin:3.11 dev/  # if irmin changed
+docker tag register-server:native register-server:prod
+# docker compose build frontend && docker tag register-frontend:latest local/frontend:dev  # if frontend changed
+# docker build -f dev/Dockerfile.irmin-prod -t local/irmin-prod:3.11 dev/  # if irmin changed
 
 # WHAT: import into k3d and restart the workload.
 cd ~/projects/register-infra
-k3d image import register-server:local -c register-dev
-# k3d image import local/irmin:3.11 -c register-dev  # if irmin changed
+k3d image import register-server:prod -c register-dev
+# k3d image import local/frontend:dev -c register-dev      # if frontend changed
+# k3d image import local/irmin-prod:3.11 -c register-dev   # if irmin changed
 
 kubectl -n register rollout restart deployment/register
 kubectl -n register rollout status deployment/register --timeout=60s
-# kubectl -n register rollout restart statefulset/irmin  # if irmin changed
+# kubectl -n register rollout restart deployment/frontend   # if frontend changed
+# kubectl -n register rollout restart statefulset/irmin     # if irmin changed
 # kubectl -n register rollout status statefulset/irmin --timeout=60s
 ```
 
@@ -1564,6 +1582,46 @@ cilium status
 > This error is cosmetic in isolation (data-plane is unaffected — Cilium still
 > enforces policy). However it indicates stale cluster state and should be
 > resolved before trusting `cilium status` for other diagnostics.
+
+### Pod-to-pod connections time out inside the register namespace (`HBONE port 15008`)
+
+> **What happens**: In Istio Ambient mode, ztunnel wraps all pod-to-pod
+> connections in an HBONE tunnel on TCP port 15008. Cilium sees port 15008 —
+> not the application port (e.g. 8080 or 8090). If a `default-deny-all`
+> NetworkPolicy exists but no rule allows port 15008 intra-namespace, every
+> pod-to-pod connection in the namespace silently times out.
+>
+> Symptoms: register CrashLoopBackOff with `"Irmin health check timed out"`,
+> or any intra-namespace service call timing out. Per-service application-port
+> NetworkPolicy rules (e.g. register → irmin on 8080) appear correct but have
+> no effect — Cilium cannot match on the application port inside the encrypted
+> HBONE tunnel.
+>
+> How to confirm: check ztunnel access logs for the HBONE hint:
+
+```bash
+kubectl -n istio-system logs -l app=ztunnel --since=10m \
+  | grep -i "hbone\|15008\|network.?policy"
+# Look for: "connection timed out, maybe a NetworkPolicy is blocking HBONE port 15008"
+```
+
+> Fix: ensure an `allow-hbone-intra-namespace` NetworkPolicy exists in the
+> namespace, allowing TCP port 15008 between all pods in that namespace.
+> This rule is already committed in `infra/k8s/network-policy/register.yaml`.
+> If you see this error, verify the NetworkPolicy is applied:
+
+```bash
+kubectl -n register get networkpolicy allow-hbone-intra-namespace
+# Should exist. If missing, sync the mesh-policy ArgoCD Application:
+argocd app sync mesh-policy
+```
+
+> **Why per-service rules are not enough**: in Ambient mode, Cilium enforces
+> application-port rules only for *cross-namespace* traffic (where HBONE is not
+> used). Within a namespace, all traffic goes through the HBONE tunnel on port
+> 15008. Intra-namespace access control is enforced by ztunnel (SPIFFE identity)
+> and the waypoint proxy (L7 HTTP policy). See
+> [ADR-INFRA-004](adr/ADR-INFRA-004.md) for the full enforcement layer model.
 
 ---
 
