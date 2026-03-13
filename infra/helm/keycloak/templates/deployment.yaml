@@ -43,6 +43,9 @@ spec:
             - name: http
               containerPort: {{ .Values.service.containerPort }}
               protocol: TCP
+            - name: management
+              containerPort: 9000
+              protocol: TCP
 
           # Container-level security hardening.
           # readOnlyRootFilesystem is NOT set: Keycloak writes to /opt/keycloak/data/
@@ -94,12 +97,12 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
 
           # Health probes use the built-in /health endpoints.
-          # Keycloak 26.x exposes /health/ready and /health/live on the
-          # management interface (same HTTP port by default in dev mode).
+          # Keycloak 26.x serves health on a SEPARATE management interface
+          # (port 9000), not on the application port (8080).
           livenessProbe:
             httpGet:
               path: /health/live
-              port: http
+              port: management
             initialDelaySeconds: 60
             periodSeconds: 15
             failureThreshold: 5
@@ -107,14 +110,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: http
+              port: management
             initialDelaySeconds: 30
             periodSeconds: 10
 
           startupProbe:
             httpGet:
               path: /health/ready
-              port: http
+              port: management
             # Keycloak JVM startup is slow — allow up to 5 minutes.
             # startup_probe_period * failure_threshold = 10 * 30 = 300s
             initialDelaySeconds: 15
