@@ -1,0 +1,48 @@
+image:
+  # Official upstream Keycloak image from Quay.io.
+  # Replaces the removed Bitnami image (docker.io/bitnami/keycloak).
+  repository: quay.io/keycloak/keycloak
+  tag: "26.0"
+  # Never for local k3d (pre-imported). Change to IfNotPresent for production.
+  pullPolicy: Never
+
+replicaCount: 1
+
+# Resource requests and limits.
+# Keycloak is JVM-based — memory usage is dominated by heap.
+# Tune based on observed usage (kubectl top pods -n infra).
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+service:
+  type: ClusterIP
+  port: 80
+  # Keycloak listens on 8080 internally (KC_HTTP_PORT default).
+  containerPort: 8080
+
+serviceAccount:
+  name: keycloak
+
+# -- Database configuration --
+# Keycloak uses the PostgreSQL deployed by the postgresql ArgoCD Application.
+# Credentials are in the postgres-credentials Secret (SOPS-encrypted).
+database:
+  host: postgresql.infra.svc.cluster.local
+  port: 5432
+  name: keycloak
+  user: bn_keycloak
+  existingSecret: postgres-credentials
+  passwordKey: keycloak-db-password
+
+# -- Admin credentials --
+# Keycloak admin user credentials for initial setup.
+# Stored in the keycloak-credentials Secret (SOPS-encrypted).
+admin:
+  existingSecret: keycloak-credentials
+  passwordKey: admin-password
+  user: admin

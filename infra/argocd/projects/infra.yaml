@@ -8,8 +8,7 @@ spec:
     Infrastructure services: PostgreSQL and Keycloak. Restricted to the infra
     namespace. Cannot create cluster-scoped resources or deploy outside infra.
 
-  # Bitnami Helm charts are pulled from the public chart repo.
-  # The infra repo is also allowed (for future local charts).
+  # Bitnami Helm charts (PostgreSQL) and the infra repo (Keycloak local chart).
   sourceRepos:
     - "https://charts.bitnami.com/bitnami"
     - "git@github.com:risquanter/register-infra.git"

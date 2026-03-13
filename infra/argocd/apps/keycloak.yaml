@@ -6,33 +6,12 @@ metadata:
 spec:
   project: infra
   source:
-    repoURL: https://charts.bitnami.com/bitnami
-    chart: keycloak
-    targetRevision: "24.4.0"
-    helm:
-      releaseName: keycloak
-      valuesObject:
-        auth:
-          existingSecret: keycloak-credentials
-          passwordSecretKey: admin-password
-        # Use the external PostgreSQL installed above; disable the bundled one.
-        postgresql:
-          enabled: false
-        externalDatabase:
-          host: postgresql-postgresql.infra.svc.cluster.local
-          port: 5432
-          user: bn_keycloak
-          existingSecret: postgres-credentials
-          existingSecretPasswordKey: keycloak-db-password
-          database: keycloak
-        containerSecurityContext:
-          enabled: true
-          runAsNonRoot: true
-          allowPrivilegeEscalation: false
-          seccompProfile:
-            type: RuntimeDefault
-          capabilities:
-            drop: ["ALL"]
+    # Local Helm chart using the official upstream Keycloak image
+    # (quay.io/keycloak/keycloak). Replaces the Bitnami chart whose
+    # container images were removed from Docker Hub by Broadcom.
+    repoURL: git@github.com:risquanter/register-infra.git
+    path: infra/helm/keycloak
+    targetRevision: HEAD
   destination:
     server: https://kubernetes.default.svc
     namespace: infra
