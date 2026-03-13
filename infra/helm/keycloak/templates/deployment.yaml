@@ -57,7 +57,12 @@ spec:
             - name: KC_DB
               value: postgres
             - name: KC_DB_URL
-              value: "jdbc:postgresql://{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}"
+              # sslmode=disable: ztunnel already provides mTLS encryption for
+              # pod-to-pod traffic (HBONE). The PostgreSQL JDBC driver defaults
+              # to sslmode=prefer and attempts an SSL upgrade handshake, which
+              # fails through the ambient mesh (EOFException at enableSSL).
+              # Application-level SSL is redundant with ambient mTLS.
+              value: "jdbc:postgresql://{{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode=disable"
             - name: KC_DB_USERNAME
               value: {{ .Values.database.user }}
             - name: KC_DB_PASSWORD
