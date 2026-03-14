@@ -210,6 +210,39 @@ spec:
         - protocol: TCP
           port: 8080
 ---
+# Allow kubelet health probes to reach Keycloak on the management port (9000).
+#
+# Keycloak 26.x serves /health/live and /health/ready on a separate management
+# interface (port 9000), not on the application port (8080). In Istio ambient
+# mode, ztunnel SNATs kubelet probe traffic to 169.254.7.127 — a well-known
+# link-local address. Cilium sees identity "world" instead of "host", so
+# fromEntities: host does not match.
+#
+# Same pattern as OPA, register, frontend, and irmin in the register namespace.
+#
+# Defense-in-depth layers on port 9000:
+#   1. ztunnel SNAT: only local kubelet probes are rewritten to 169.254.7.127
+#   2. CiliumNetworkPolicy: only 169.254.7.127 is allowed to reach 9000
+#   3. PeerAuthentication: port 9000 PERMISSIVE (keycloak-mgmt-permissive)
+#   4. No Service exposes 9000 — cluster-external access is impossible
+#   5. Port 9000 serves only health/metrics, not the Keycloak admin console
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-keycloak-healthcheck
+  namespace: infra
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  ingress:
+    - fromCIDR:
+        - 169.254.7.127/32
+      toPorts:
+        - ports:
+            - port: "9000"
+              protocol: TCP
+---
 # Allow DNS egress for all infra pods.
 # Required for Kubernetes internal DNS resolution (e.g., keycloak resolving
 # postgresql-postgresql.infra.svc.cluster.local).

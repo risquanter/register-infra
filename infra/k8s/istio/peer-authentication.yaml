@@ -11,16 +11,12 @@
 #   - Plaintext TCP connections are rejected at the ztunnel level
 #   - Pods not enrolled in the mesh cannot reach pods in this namespace
 #
-# Currently applied per-namespace (register, argocd). Mesh-wide STRICT
-# (istio-system) is deferred until all namespaces are enrolled and tested —
-# specifically, the infra namespace (PostgreSQL/Keycloak) needs verification
-# that ztunnel + PeerAuthentication STRICT doesn't break liveness probes.
+# Currently applied per-namespace (register, argocd, infra). Mesh-wide STRICT
+# (istio-system) is deferred until all namespaces are enrolled and tested.
 #
 # TODO: Promote to mesh-wide STRICT in istio-system when:
-#   1. The infra namespace has been verified with STRICT PeerAuthentication
-#      (PostgreSQL and Keycloak probes survive ztunnel + mTLS interception)
-#   2. The observability namespace is enrolled in the mesh (meshEnroll: true)
-#   3. Any future namespaces (e.g., SpiceDB) are enrolled and tested
+#   1. The observability namespace is enrolled in the mesh (meshEnroll: true)
+#   2. Any future namespaces (e.g., SpiceDB) are enrolled and tested
 #   At that point, replace these per-namespace resources with a single
 #   PeerAuthentication in istio-system with mode: STRICT.
 apiVersion: security.istio.io/v1
@@ -37,6 +33,19 @@ kind: PeerAuthentication
 metadata:
   name: strict-mtls
   namespace: argocd
+spec:
+  mtls:
+    mode: STRICT
+---
+# Infra namespace — STRICT mTLS.
+# PostgreSQL uses exec probes (pg_isready on 127.0.0.1) which bypass the
+# network entirely. Keycloak's management port 9000 is handled by the
+# keycloak-mgmt-permissive exception below.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: strict-mtls
+  namespace: infra
 spec:
   mtls:
     mode: STRICT
@@ -111,4 +120,28 @@ spec:
       app.kubernetes.io/name: frontend
   portLevelMtls:
     8080:
+      mode: PERMISSIVE
+---
+# Keycloak management port — allow plaintext kubelet health probes.
+#
+# Keycloak 26.x serves /health/live and /health/ready on management port 9000,
+# separate from the application port (8080). Kubelet probes arrive via ztunnel
+# SNAT as plaintext from 169.254.7.127. This workload-scoped PeerAuthentication
+# sets port 9000 to PERMISSIVE so ztunnel passes the plaintext probe through.
+#
+# Port 8080 (application) remains STRICT via the namespace-wide policy.
+#
+# Network-level access control on 9000 is enforced by CiliumNetworkPolicy
+# allow-ingress-keycloak-healthcheck (fromCIDR: 169.254.7.127/32).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: keycloak-mgmt-permissive
+  namespace: infra
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  portLevelMtls:
+    9000:
       mode: PERMISSIVE
