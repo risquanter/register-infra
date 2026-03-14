@@ -1,6 +1,6 @@
 # ADR-INFRA-007: SPA Serving Strategy — nginx Frontend Pod + Istio Gateway Ingress
 
-**Status:** Accepted (awaiting implementation)  
+**Status:** Accepted (frontend chart implemented at `infra/helm/frontend/`; Istio Gateway ingress pending)  
 **Date:** 2026-03-10  
 **Tags:** frontend, spa, nginx, istio-gateway, ingress, routing
 

@@ -178,7 +178,9 @@ kubectl version --client
 > a `values.yaml` configuration file. Instead of writing dozens of YAML files
 > by hand, you install a chart and configure it with values. For example,
 > `helm install postgresql bitnami/postgresql` deploys a full PostgreSQL
-> database with one command.
+> database with one command. Keycloak is deployed from a local Helm chart
+> (at `infra/helm/keycloak/`) using the official upstream image
+> `quay.io/keycloak/keycloak:26.0`.
 
 ```bash
 # WHAT: install Helm via the official install script.
@@ -874,6 +876,8 @@ kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
 #   manifests must use the SSH form of the URL. HTTPS + SSH key does not work.
 # NOTE: files that reference external chart repos (e.g. postgresql.yaml
 #   pointing at charts.bitnami.com) do not need this change.
+#   Files pointing at local chart paths (keycloak.yaml, frontend.yaml,
+#   irmin.yaml) also use the SSH repo URL and are included below.
 cd /home/danago/projects/register-infra
 
 REPO_URL="git@github.com:risquanter/register-infra.git"
@@ -883,7 +887,10 @@ sed -i "s|https://github.com/<org>/register-infra|${REPO_URL}|g" \
   infra/argocd/apps/namespaces.yaml \
   infra/argocd/apps/register.yaml \
   infra/argocd/apps/mesh-policy.yaml \
-  infra/argocd/apps/opa.yaml
+  infra/argocd/apps/opa.yaml \
+  infra/argocd/apps/keycloak.yaml \
+  infra/argocd/apps/frontend.yaml \
+  infra/argocd/apps/irmin.yaml
 
 # WHAT: commit so ArgoCD sees the correct URL when it clones.
 git add infra/argocd/apps/
@@ -1006,6 +1013,13 @@ cd ~/projects/register-infra
 k3d image import register-server:prod -c register-dev
 k3d image import local/irmin-prod:3.11 -c register-dev
 k3d image import local/frontend:dev -c register-dev
+
+# ── Import the Keycloak image ──
+# WHAT: quay.io multi-arch images fail with `k3d image import`.
+# Workaround: docker save | ctr images import.
+docker pull quay.io/keycloak/keycloak:26.0
+docker save quay.io/keycloak/keycloak:26.0 \
+  | docker exec -i k3d-register-dev-server-0 ctr --namespace k8s.io images import -
 ```
 
 > **After rebuilds**: repeat the tag + import + rollout restart cycle:
@@ -1018,7 +1032,7 @@ k3d image import local/frontend:dev -c register-dev
 > # k3d image import local/irmin-prod:3.11 -c register-dev  # if irmin changed
 > # k3d image import local/frontend:dev -c register-dev     # if frontend changed
 > kubectl -n register rollout restart deployment/register
-> # kubectl -n register rollout restart statefulset/irmin    # if irmin changed
+> # kubectl -n register rollout restart deployment/irmin     # if irmin changed
 > # kubectl -n register rollout restart deployment/frontend  # if frontend changed
 > ```
 
@@ -1051,9 +1065,9 @@ ArgoCD will now discover and deploy these Applications automatically:
 |---|---|---|
 | `namespaces` | `argocd`, `register`, `infra`, `observability` namespaces with Pod Security labels, mesh enrollment, and LimitRanges | `infra/helm/namespaces/` |
 | `postgresql` | PostgreSQL database in `infra` namespace | Bitnami Helm chart (remote) |
-| `keycloak` | Keycloak identity provider in `infra` namespace | Bitnami Helm chart (remote) |
+| `keycloak` | Keycloak identity provider in `infra` namespace | `infra/helm/keycloak/` (local chart, `quay.io/keycloak/keycloak:26.0`) |
 | `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
-| `irmin` | Irmin GraphQL persistence backend (StatefulSet + PVC) in `register` namespace | `infra/helm/irmin/` |
+| `irmin` | Irmin GraphQL persistence backend (Deployment + PVC) in `register` namespace | `infra/helm/irmin/` |
 | `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
 | `register` | Application API server (port 8090 API, port 8091 health) in `register` namespace | `infra/helm/register/` |
 | `frontend` | Frontend SPA (nginx, port 8080) in `register` namespace | `infra/helm/frontend/` |
@@ -1373,8 +1387,8 @@ k3d image import register-server:prod -c register-dev
 kubectl -n register rollout restart deployment/register
 kubectl -n register rollout status deployment/register --timeout=60s
 # kubectl -n register rollout restart deployment/frontend   # if frontend changed
-# kubectl -n register rollout restart statefulset/irmin     # if irmin changed
-# kubectl -n register rollout status statefulset/irmin --timeout=60s
+# kubectl -n register rollout restart deployment/irmin      # if irmin changed
+# kubectl -n register rollout status deployment/irmin --timeout=60s
 ```
 
 ---

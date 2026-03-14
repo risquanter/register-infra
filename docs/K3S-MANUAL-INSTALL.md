@@ -236,7 +236,7 @@ kubectl top nodes || true
 
 ## 2) Phase K.2 — Istio ambient + auth hardening
 
-Istio is installed immediately after the cluster bootstrap so ztunnel is running before any workload pods are created. This ensures mesh interception applies from each pod's first packet. PostgreSQL and Keycloak (installed next in the `infra` namespace) are unaffected — that namespace is never enrolled in the mesh.
+Istio is installed immediately after the cluster bootstrap so ztunnel is running before any workload pods are created. This ensures mesh interception applies from each pod's first packet. Both the `register` and `infra` namespaces are enrolled in the mesh (`meshEnroll: true`) with PeerAuthentication STRICT mTLS. Health probes are handled via CiliumNetworkPolicy (allowing `169.254.7.127/32`) and port-level PERMISSIVE PeerAuthentication.
 
 ### 2.1 Install Istio CLI
 
@@ -446,36 +446,49 @@ shred -u /tmp/register-postgres-values.yaml
 
 ## 5) Phase K.5 — Keycloak (external DB, hardened secret flow)
 
+> **Note:** Keycloak is deployed from a local Helm chart at
+> `infra/helm/keycloak/` using the official upstream image
+> `quay.io/keycloak/keycloak:26.0`. The previous Bitnami chart was
+> abandoned after Bitnami removed all Keycloak images from Docker Hub.
+
 ### 5.1 Create values file with minimal secret exposure
 
 ```bash
 umask 077
 cat > /tmp/keycloak-values.yaml <<'YAML'
-auth:
-  adminUser: "admin"
-  adminPassword: "REPLACE_ME_STRONG_ADMIN_PASSWORD"
-postgresql:
-  enabled: false
-externalDatabase:
-  host: register-postgres-postgresql.infra.svc.cluster.local
+image:
+  repository: quay.io/keycloak/keycloak
+  tag: "26.0"
+  pullPolicy: Never    # for k3d — pre-imported into containerd
+database:
+  host: postgresql.infra.svc.cluster.local
   port: 5432
+  name: keycloak
   user: bn_keycloak
-  password: "REPLACE_ME_STRONG_KEYCLOAK_DB_PASSWORD"
-  database: keycloak
-containerSecurityContext:
-  enabled: true
-  runAsNonRoot: true
+admin:
+  user: admin
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 1Gi
+    cpu: 1000m
 YAML
 ```
 
 ### 5.2 Install Keycloak idempotently
 
 ```bash
-helm upgrade --install keycloak bitnami/keycloak \
+# For GitOps (ArgoCD manages the chart via infra/argocd/apps/keycloak.yaml):
+kubectl apply -f infra/argocd/apps/root.yaml
+
+# For manual install outside ArgoCD:
+helm upgrade --install keycloak ./infra/helm/keycloak \
   --namespace infra \
   -f /tmp/keycloak-values.yaml
 
-kubectl -n infra rollout status statefulset/keycloak --timeout=300s
+kubectl -n infra rollout status deployment/keycloak --timeout=300s
 ```
 
 ### 5.3 Bootstrap realm locally

@@ -55,13 +55,40 @@ infra/
         deployment.yaml
         service.yaml
         pdb.yaml
+    keycloak/                   # Keycloak local chart (quay.io/keycloak/keycloak:26.0)
+      Chart.yaml
+      values.yaml
+      templates/
+        _helpers.tpl
+        deployment.yaml
+        service.yaml
+        serviceaccount.yaml
+    frontend/                   # Frontend SPA (nginx 1.27.5-alpine-slim)
+      Chart.yaml
+      values.yaml
+      templates/
+        _helpers.tpl
+        deployment.yaml
+        service.yaml
+        serviceaccount.yaml
+    irmin/                      # Irmin GraphQL persistence backend
+      Chart.yaml
+      values.yaml
+      templates/
+        _helpers.tpl
+        deployment.yaml
+        service.yaml
+        serviceaccount.yaml
+        pvc.yaml
   argocd/
     apps/                       # App of Apps directory — ArgoCD watches this
       root.yaml                 #   the single root Application
       namespaces.yaml           #   namespace chart
       postgresql.yaml           #   PostgreSQL (Bitnami remote chart)
-      keycloak.yaml             #   Keycloak (Bitnami remote chart)
+      keycloak.yaml             #   Keycloak (local chart, quay.io image)
       register.yaml             #   application Deployment + Image Updater
+      frontend.yaml             #   frontend SPA (nginx)
+      irmin.yaml                #   Irmin GraphQL persistence backend
       opa.yaml                  #   OPA Helm chart
       mesh-policy.yaml          #   Istio/OPA/NetworkPolicy/RBAC manifests
     projects/                   # AppProject definitions — least-privilege scoping
@@ -89,7 +116,10 @@ docs/
     ADR-INFRA-002.md            #   Fail-closed availability guarantees
     ADR-INFRA-003.md            #   AppProject scoping
     ADR-INFRA-004.md            #   Defence-in-depth layered controls
+    ADR-INFRA-004-appendix.md   #   HBONE/waypoint appendix
     ADR-INFRA-005.md            #   Testing strategy — tool selection and skip semantics
+    ADR-INFRA-006.md            #   Per-namespace SOPS secrets (DB credentials)
+    ADR-INFRA-007.md            #   SPA serving strategy (nginx frontend)
 tests/
   run-regression.sh             # wrapper with strict skip semantics (ADR-INFRA-005)
   bats/
@@ -129,8 +159,10 @@ Application and AppProject resources in the `argocd` namespace.
 | [root.yaml](../infra/argocd/apps/root.yaml) | Root App of Apps | default | Watches `infra/argocd/apps/` + `infra/argocd/projects/` via `sources`, automated sync + prune + self-heal, cascade finalizer |
 | [namespaces.yaml](../infra/argocd/apps/namespaces.yaml) | Namespace Helm chart | platform | Points at `infra/helm/namespaces/`, creates namespaces with PSS labels, mesh enrollment, and LimitRanges |
 | [postgresql.yaml](../infra/argocd/apps/postgresql.yaml) | PostgreSQL database | infra | Bitnami chart v16.4.0, references `postgres-credentials` Secret, 10Gi PVC, hardened securityContext |
-| [keycloak.yaml](../infra/argocd/apps/keycloak.yaml) | Keycloak IdP | infra | Bitnami chart, connects to PostgreSQL via internal DNS, references encrypted credentials |
+| [keycloak.yaml](../infra/argocd/apps/keycloak.yaml) | Keycloak IdP | infra | Local chart (`quay.io/keycloak/keycloak:26.0`), `start-dev` mode, health on management port 9000, connects to PostgreSQL via internal DNS |
 | [register.yaml](../infra/argocd/apps/register.yaml) | Application Deployment | app | Image Updater annotations for automated GHCR → git → cluster deploy loop |
+| [frontend.yaml](../infra/argocd/apps/frontend.yaml) | Frontend SPA | app | nginx 1.27.5-alpine-slim, serves built SPA, `BACKEND_URL` → register:8090 |
+| [irmin.yaml](../infra/argocd/apps/irmin.yaml) | Irmin persistence | app | `local/irmin-prod:3.11`, GraphQL + PVC for workspace data |
 | [opa.yaml](../infra/argocd/apps/opa.yaml) | OPA Helm chart | platform | 2 replicas + PDB, policy from single canonical Rego source via `Files.Get` |
 | [mesh-policy.yaml](../infra/argocd/apps/mesh-policy.yaml) | Security policies | platform | Istio JWT/auth, PeerAuthentication, OPA ext_authz EnvoyFilter, NetworkPolicies, RBAC role definitions |
 
@@ -181,7 +213,7 @@ Open Policy Agent with the `envoy_ext_authz_grpc` plugin. Key design decisions:
 | [istio/request-authentication.yaml](../infra/k8s/istio/request-authentication.yaml) | Validates JWT signatures against Keycloak's JWKS endpoint; `outputClaimToHeaders` injects `x-user-id`, `x-user-email`, `x-user-roles`; audience validation (`register-api`) prevents token confusion |
 | [istio/authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml) | Requires valid JWT on authenticated routes; exempts public routes (`/w/*`, `/workspaces/*`, `/health`) |
 | [istio/envoy-filter-strip-headers.yaml](../infra/k8s/istio/envoy-filter-strip-headers.yaml) | Strips forged identity headers (`x-user-id`, `x-user-email`, `x-user-roles`) before JWT validation |
-| [istio/peer-authentication.yaml](../infra/k8s/istio/peer-authentication.yaml) | STRICT mTLS for `register` and `argocd` namespaces (per-namespace; mesh-wide deferred — see TODO in file) |
+| [istio/peer-authentication.yaml](../infra/k8s/istio/peer-authentication.yaml) | STRICT mTLS for `register`, `argocd`, and `infra` namespaces; port-level PERMISSIVE for health probe ports (OPA 8282, register 8091, frontend 8080, keycloak 9000) |
 | [opa/ext-authz-filter.yaml](../infra/k8s/opa/ext-authz-filter.yaml) | Routes waypoint authorization checks to OPA gRPC (port 9191, 100ms timeout, fail-closed) |
 | [network-policy/register.yaml](../infra/k8s/network-policy/register.yaml) | Default-deny + targeted allows: waypoint→app, waypoint→OPA, app→PostgreSQL, app→Keycloak, DNS egress |
 | [network-policy/infra.yaml](../infra/k8s/network-policy/infra.yaml) | Default-deny + targeted allows: register→PostgreSQL, register→Keycloak, Keycloak→PostgreSQL, ArgoCD health checks, istiod→Keycloak JWKS, DNS egress |
@@ -337,16 +369,23 @@ kill $PF_PID 2>/dev/null || true
 
 ### PostgreSQL or Keycloak crash after mesh enrollment
 
-> **Known technical limitation.** The `infra` namespace is enrolled in the
+> **Resolved for the current stack.** The `infra` namespace is enrolled in the
 > mesh (`meshEnroll: true` in `infra/helm/namespaces/values.yaml`). Ztunnel
-> intercepts all L4 traffic, including kubelet liveness probes. PostgreSQL
-> uses a custom binary wire protocol (not HTTP). When the kubelet probes
-> port 5432 through ztunnel's HBONE tunnel, some PostgreSQL images fail the
-> health check because the probe traffic arrives wrapped in a way the server
-> doesn't expect.
+> intercepts all L4 traffic, including kubelet health probes. This caused probe
+> failures because ztunnel SNATs kubelet probes to `169.254.7.127`, which the
+> default-deny NetworkPolicy blocks.
 >
-> **This is a ztunnel/non-HTTP-protocol limitation, not a design choice.**
-> Diagnose, mitigate, and if necessary fall back — but track it as a gap.
+> **Current solution (committed):**
+> - **CiliumNetworkPolicy** `allow-ingress-keycloak-healthcheck` permits
+>   traffic from `169.254.7.127/32` to port 9000 (Keycloak management port)
+> - **PeerAuthentication** `keycloak-mgmt-permissive` sets port 9000 to
+>   PERMISSIVE mTLS so kubelet's non-mTLS probes succeed
+> - PostgreSQL uses `exec` probes (`pg_isready` on `127.0.0.1`) which bypass
+>   the network and require no CiliumNetworkPolicy
+> - Similar CiliumNetworkPolicy + PeerAuthentication pairs exist in register
+>   namespace for OPA (8282), register (8091), and frontend (8080)
+>
+> **Rollback (if future changes break probes):**
 
 ```bash
 # DIAGNOSE: check what actually failed.
@@ -354,18 +393,8 @@ kubectl -n infra get events --sort-by=.lastTimestamp | tail -20
 kubectl -n infra describe pod <postgres-pod>
 # Look for: "Liveness probe failed" or "connection refused" on probe ports.
 
-# MITIGATION 1: exclude probe ports from ztunnel interception.
-# Edit infra/helm/namespaces/values.yaml — uncomment probeExcludePorts.
-# Then apply the annotation to the StatefulSet:
-kubectl -n infra patch statefulset register-postgres-postgresql \
-  --type=json \
-  -p='[{"op":"add","path":"/spec/template/metadata/annotations","value":{"traffic.sidecar.istio.io/excludeInboundPorts":"5432"}}]'
-
-# MITIGATION 2 (full rollback): remove the infra namespace from the mesh.
+# MITIGATION (full rollback): remove the infra namespace from the mesh.
 # This means app→postgres and app→keycloak traffic becomes plaintext TCP.
-# State this clearly as an accepted risk — the reason is a technical
-# limitation in ztunnel's non-HTTP protocol handling, not because infra
-# "doesn't need encryption".
 kubectl label namespace infra istio.io/dataplane-mode- --overwrite
 # Or use the dedicated rollback values file:
 # helm upgrade namespaces ./infra/helm/namespaces \
@@ -404,7 +433,7 @@ before starting a bootstrap guide; revisit as needed.
 | **Container** | A lightweight, isolated process running from a Docker/OCI image. |
 | **Namespace** | A logical partition inside a cluster. Pods in different namespaces are isolated by default. |
 | **Deployment** | Declares "run N copies of this pod". Kubernetes ensures the actual count matches the declared count. |
-| **StatefulSet** | Like a Deployment, but for databases: pods get stable names and persistent storage. PostgreSQL and Keycloak use this. |
+| **StatefulSet** | Like a Deployment, but for databases: pods get stable names and persistent storage. PostgreSQL uses this. |
 | **DaemonSet** | Runs one copy of a pod on every node. Used by Cilium and Istio's ztunnel. |
 | **Service** | A stable DNS name + IP that routes traffic to pods. Pods come and go; Services provide a stable address. |
 | **Secret** | A Kubernetes resource for sensitive data (passwords, tokens). Optionally encrypted at rest with `--secrets-encryption` (enabled on Hetzner; not available in k3d). |

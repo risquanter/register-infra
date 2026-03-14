@@ -159,6 +159,10 @@ will process).
 # Checks Chart.yaml, values.yaml structure, and any values.schema.json.
 helm lint infra/helm/register/
 helm lint infra/helm/namespaces/
+helm lint infra/helm/opa/
+helm lint infra/helm/keycloak/
+helm lint infra/helm/frontend/
+helm lint infra/helm/irmin/
 
 # ── Render and inspect output ─────────────────────────────────────────────────
 # helm template renders the chart to plain YAML without talking to a cluster.
@@ -534,11 +538,14 @@ jobs:
         run: trivy config infra/terraform/ --exit-code 1 --severity HIGH,CRITICAL
 
       # ── Helm ─────────────────────────────────────────────────────────────────
-      - name: Helm lint — register chart
-        run: helm lint infra/helm/register/
-
-      - name: Helm lint — namespaces chart
-        run: helm lint infra/helm/namespaces/
+      - name: Helm lint — all charts
+        run: |
+          helm lint infra/helm/register/
+          helm lint infra/helm/namespaces/
+          helm lint infra/helm/opa/
+          helm lint infra/helm/keycloak/
+          helm lint infra/helm/frontend/
+          helm lint infra/helm/irmin/
 
       - name: kubeconform — register chart
         run: |
@@ -557,6 +564,9 @@ jobs:
         run: |
           helm template register infra/helm/register/ | pluto detect -
           helm template namespaces infra/helm/namespaces/ | pluto detect -
+          helm template keycloak infra/helm/keycloak/ | pluto detect -
+          helm template frontend infra/helm/frontend/ | pluto detect -
+          helm template irmin infra/helm/irmin/ | pluto detect -
 
       # ── Raw manifests ────────────────────────────────────────────────────────
       - name: kubeconform — k8s manifests

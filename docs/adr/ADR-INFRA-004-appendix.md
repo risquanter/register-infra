@@ -211,7 +211,7 @@ are deployed.
 | Waypoint proxy | ❌ | ✅ | ✅ |
 | cert-manager + ACME | ❌ | ❌ | ✅ |
 | Istio Gateway (ingress) | ❌ | ❌ | ✅ |
-| Keycloak (JWT issuer) | ❌ | ❌ | ✅ |
+| Keycloak (JWT issuer) | ✅ | ✅ | ✅ |
 
 "k3d (target)" reflects the decision in ADR-INFRA-004 §3: waypoint deployed
 locally as one of the final LOCAL-K3D-BOOTSTRAP steps.

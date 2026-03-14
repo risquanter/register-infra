@@ -55,15 +55,16 @@
 ║  │             │ only egress allowed by NetworkPolicy [Cilium]     │ ║
 ║  └─────────────┼───────────────────────────────────────────────────┘ ║
 ║                │                                                     ║
-║                │   plain TCP (cluster-internal, no mesh enrollment)  ║
+║                │   mTLS (ztunnel HBONE, cross-namespace)             ║
+║                │   + NetworkPolicy: HBONE 15008 + per-svc [Cilium]   ║
 ║                ▼                                                     ║
 ║  ┌──────────────────────────────────────┐                            ║
 ║  │  infra namespace  (PSS: baseline)    │                            ║
-║  │                                      │                            ║
+║  │  PeerAuthentication: STRICT          │                            ║
 ║  │  ┌──────────────┐  ┌──────────────┐  │                            ║
 ║  │  │  PostgreSQL  │  │  Keycloak    │  │                            ║
-║  │  │  :5432       │  │  :80         │  │                            ║
-║  │  │              │  │              │  │                            ║
+║  │  │  :5432       │  │  :80 / :9000 │  │                            ║
+║  │  │              │  │  (mgmt: 9000)│  │                            ║
 ║  │  │  app data +  │  │  issues JWTs │  │                            ║
 ║  │  │  Keycloak DB │  │  owns JWKS   │  │                            ║
 ║  │  └──────────────┘  └──────────────┘  │                            ║
@@ -89,11 +90,14 @@
 > not against a fully compromised kernel. The threat model documents this
 > explicitly (T-NodeCompromise).
 >
-> **Rollback**: if enrolling the infra namespace causes PostgreSQL or Keycloak
-> probe failures, remove the label (`kubectl label namespace infra
-> istio.io/dataplane-mode-`) and the segment reverts to plain TCP. See
-> [GITOPS-OPERATIONS.md — Troubleshooting](GITOPS-OPERATIONS.md#troubleshooting)
-> for the full rollback procedure.
+> **Rollback**: if future changes cause infra namespace probe failures,
+> the rollback procedure
+> (`kubectl label namespace infra istio.io/dataplane-mode-`) reverts cross-
+> namespace traffic to plain TCP. See
+> [GITOPS-OPERATIONS.md — Troubleshooting](GITOPS-OPERATIONS.md#troubleshooting).
+> Current state: infra probes are healthy — CiliumNetworkPolicy allows
+> `169.254.7.127/32` to reach health probe ports, and PeerAuthentication
+> sets those ports to PERMISSIVE.
 
 ---
 

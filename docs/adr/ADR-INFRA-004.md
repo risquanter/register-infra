@@ -219,7 +219,7 @@ metadata:
 |----------|---------|
 | `infra/k8s/network-policy/register.yaml` | Default-deny + HBONE allow + per-service rules (topology docs) + DNS egress |
 | `infra/k8s/network-policy/infra.yaml` | Default-deny + allow rules + DNS egress for infra ns |
-| `infra/k8s/istio/peer-authentication.yaml` | STRICT mTLS for register namespace |
+| `infra/k8s/istio/peer-authentication.yaml` | STRICT mTLS for register, argocd, and infra namespaces; port-level PERMISSIVE for health probe ports |
 | `infra/k8s/istio/authorization-policy.yaml` | AuthorizationPolicy with `targetRef` → waypoint Gateway |
 | `infra/k8s/istio/` (planned) | Waypoint Gateway resource for register namespace |
 
@@ -240,7 +240,7 @@ metadata:
 ### Open HBONE for All Namespaces
 
 - **What**: allow port 15008 cluster-wide instead of per-namespace
-- **Why rejected**: cross-namespace HBONE would allow any mesh-enrolled pod in any namespace to initiate connections to pods in the register namespace. Scoping to `namespaceSelector: register` limits HBONE-open traffic to the intra-namespace trust boundary. Cross-namespace traffic (register → postgres in infra) uses direct TCP, not HBONE, and is controlled by per-service Cilium rules.
+- **Why rejected**: cross-namespace HBONE would allow any mesh-enrolled pod in any namespace to initiate connections to pods in the register namespace. Scoping to `namespaceSelector: register` limits HBONE-open traffic to the intra-namespace trust boundary. Cross-namespace traffic (register → infra) uses HBONE tunnels between ztunnel instances in each namespace, controlled by per-service Cilium rules and HBONE allow rules.
 
 ---
 

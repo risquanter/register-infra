@@ -8,7 +8,7 @@
 
 ## Context
 
-- The `postgres-credentials` Secret in the `infra` namespace holds the PostgreSQL superuser password (`postgres-password`) and the Keycloak DB user password (`keycloak-db-password`). Both are consumed exclusively by Bitnami charts deployed in `infra`
+- The `postgres-credentials` Secret in the `infra` namespace holds the PostgreSQL superuser password (`postgres-password`) and the Keycloak DB user password (`keycloak-db-password`). Both are consumed exclusively by the PostgreSQL Bitnami chart and the local Keycloak chart deployed in `infra`
 - Kubernetes Secrets are namespace-scoped — a pod in `register` cannot reference a Secret in `infra`. Any future service that needs database credentials must have its own Secret in its own namespace
 - Least-privilege database access requires per-service roles: the register app should connect as a dedicated `register_app` role with `GRANT` only on its own schema, not as the `postgres` superuser or the `bn_keycloak` user. Sharing the superuser password across services turns a single compromised pod into full DDL/DML over all databases
 - The register app currently uses in-memory storage (`TrieMap` / `Ref[Map]`). When `WorkspaceStorePostgres` is implemented, it will need a database password delivered via a Kubernetes Secret. The credential delivery mechanism must be decided before that work begins

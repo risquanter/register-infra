@@ -346,7 +346,7 @@ The `postgres-credentials` Secret in the `infra` namespace contains two keys:
 | Key | Who uses it | Purpose |
 |---|---|---|
 | `postgres-password` | Bitnami PostgreSQL chart | Sets the `postgres` superuser password on DB init |
-| `keycloak-db-password` | Bitnami Keycloak chart | Connects as `bn_keycloak` to the `keycloak` database |
+| `keycloak-db-password` | Keycloak local chart | Connects as `bn_keycloak` to the `keycloak` database |
 
 **The register app must NOT use either of these keys.** The superuser password
 grants full DDL/DML over all databases, and the Keycloak password is scoped to
@@ -709,10 +709,12 @@ ArgoCD will now discover and deploy these Applications automatically:
 |---|---|---|
 | `namespaces` | Namespaces with Pod Security labels, mesh enrollment, LimitRanges | [infra/helm/namespaces/](../infra/helm/namespaces/) |
 | `postgresql` | PostgreSQL database (StatefulSet) | Bitnami Helm chart (remote) |
-| `keycloak` | Keycloak identity provider | Bitnami Helm chart (remote) |
+| `keycloak` | Keycloak identity provider | [infra/helm/keycloak/](../infra/helm/keycloak/) (local chart, `quay.io/keycloak/keycloak:26.0`) |
 | `opa` | OPA ext_authz server (2 replicas + PDB) | [infra/helm/opa/](../infra/helm/opa/) |
 | `mesh-policy` | Istio auth, PeerAuthentication, NetworkPolicies, RBAC | [infra/k8s/](../infra/k8s/) |
 | `register` | Application Deployment + Image Updater config | [infra/helm/register/](../infra/helm/register/) |
+| `frontend` | Frontend SPA (nginx 1.27.5-alpine-slim) | [infra/helm/frontend/](../infra/helm/frontend/) |
+| `irmin` | Irmin GraphQL persistence backend | [infra/helm/irmin/](../infra/helm/irmin/) |
 
 ### 4.5 Watch the sync
 
@@ -797,7 +799,7 @@ rm -f kubeconfig.yaml
 | **Container images** | GHCR private registry, digest pinning via Image Updater. Two application images: `register-server` and `irmin` (both built from `risquanter/register`). | Image Updater PAT has `read:packages` scope only. |
 | **API server access** | Hetzner firewall restricts port 6443 to `operator_cidr` | Must update CIDR when ISP changes your IP. |
 | **SSH access** | Key-only auth, firewall-restricted to `operator_cidr` | No bastion host — direct SSH from operator IP. |
-| **Pod-to-pod traffic** | Istio mTLS (ambient) + NetworkPolicy (Cilium) | ztunnel may break PostgreSQL/Keycloak liveness probes (see below). Rollback file exists. |
+| **Pod-to-pod traffic** | Istio mTLS (ambient) + NetworkPolicy (Cilium) + CiliumNetworkPolicy for health probes | Health probe ports use PeerAuthentication PERMISSIVE. Rollback: remove infra from mesh. |
 | **ArgoCD** | Enrolled in mesh (§4.1), admin password rotated, UI behind port-forward | No SSO in this baseline. Add Dex + OIDC for team use. |
 | **Supply chain** | k3s installed via `curl \| bash` | Trusts k3s download server at provision time. Mitigate with custom VM images. |
 | **First SSH connection** | `StrictHostKeyChecking=no` for kubeconfig retrieval | One-time risk during fresh VM provisioning. Pin host key afterward. |
@@ -812,33 +814,21 @@ rm -f kubeconfig.yaml
 > CPU, memory, and pod count. This prevents a runaway pod from starving OPA —
 > which with `failure_mode_deny: true` would cause 100% 403 for all requests.
 
-> **Be honest about this.** The `infra` namespace is enrolled in the mesh
-> (`meshEnroll: true` in [values.yaml](../infra/helm/namespaces/values.yaml)).
-> This means ztunnel intercepts **all** L4 traffic, including kubelet health
-> check probes. PostgreSQL uses a custom binary wire protocol (not HTTP). When
-> the kubelet sends a TCP liveness probe to port 5432, ztunnel wraps it in
-> HBONE (its mTLS tunnel). Some PostgreSQL images (particularly Bitnami's
-> StatefulSet) fail the liveness check because the probe traffic arrives
-> through ztunnel's interception rather than as a direct TCP connection.
+> **Resolved for the current stack.** The `infra` namespace is enrolled in the
+> mesh (`meshEnroll: true` in [values.yaml](../infra/helm/namespaces/values.yaml)).
+> Ztunnel intercepts all L4 traffic including kubelet probes. This is handled by:
 >
-> **This is a technical limitation of ztunnel's transparent L4 interception
-> with non-HTTP protocols, not a security design choice.** The correct
-> response to it is:
+> - **CiliumNetworkPolicy** per service allowing `169.254.7.127/32` (ztunnel
+>   SNAT address) to reach health probe ports
+> - **PeerAuthentication** port-level PERMISSIVE for probe ports so kubelet's
+>   non-mTLS probes succeed
+> - PostgreSQL uses `exec` probes (`pg_isready` on `127.0.0.1`) which bypass
+>   the network entirely
 >
-> 1. **Try it first** — many versions and configurations work fine. The
->    default config has `meshEnroll: true`.
-> 2. **If probes fail**, use `probeExcludePorts` to exclude port 5432 from
->    ztunnel interception (see the comment in
->    [values.yaml](../infra/helm/namespaces/values.yaml)).
-> 3. **If that doesn't work**, use the full rollback file
->    [values-infra-no-mesh.yaml](../infra/helm/namespaces/values-infra-no-mesh.yaml)
->    to remove infra from the mesh entirely.
->
-> **If you use the rollback, state it clearly as an accepted risk**: `app →
-> postgres` and `app → keycloak` traffic becomes plaintext TCP. Do not
-> rationalize this as "infra doesn't need encryption" — the reason is a
-> specific technical limitation, and it should be tracked as a gap to close
-> when Istio ambient mode improves its non-HTTP protocol handling.
+> **If future changes break probes**, use the full rollback file
+> [values-infra-no-mesh.yaml](../infra/helm/namespaces/values-infra-no-mesh.yaml)
+> to remove infra from the mesh. State this as an accepted risk: `app →
+> postgres` and `app → keycloak` traffic becomes plaintext TCP.
 
 ---
 
