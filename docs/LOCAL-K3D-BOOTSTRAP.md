@@ -1032,7 +1032,7 @@ docker save quay.io/keycloak/keycloak:26.0 \
 > # k3d image import local/irmin-prod:3.11 -c register-dev  # if irmin changed
 > # k3d image import local/frontend:dev -c register-dev     # if frontend changed
 > kubectl -n register rollout restart deployment/register
-> # kubectl -n register rollout restart deployment/irmin     # if irmin changed
+> # kubectl -n register rollout restart statefulset/irmin    # if irmin changed
 > # kubectl -n register rollout restart deployment/frontend  # if frontend changed
 > ```
 
@@ -1067,7 +1067,7 @@ ArgoCD will now discover and deploy these Applications automatically:
 | `postgresql` | PostgreSQL database in `infra` namespace | Bitnami Helm chart (remote) |
 | `keycloak` | Keycloak identity provider in `infra` namespace | `infra/helm/keycloak/` (local chart, `quay.io/keycloak/keycloak:26.0`) |
 | `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
-| `irmin` | Irmin GraphQL persistence backend (Deployment + PVC) in `register` namespace | `infra/helm/irmin/` |
+| `irmin` | Irmin GraphQL persistence backend (StatefulSet + PVC) in `register` namespace | `infra/helm/irmin/` |
 | `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
 | `register` | Application API server (port 8090 API, port 8091 health) in `register` namespace | `infra/helm/register/` |
 | `frontend` | Frontend SPA (nginx, port 8080) in `register` namespace | `infra/helm/frontend/` |
@@ -1387,8 +1387,8 @@ k3d image import register-server:prod -c register-dev
 kubectl -n register rollout restart deployment/register
 kubectl -n register rollout status deployment/register --timeout=60s
 # kubectl -n register rollout restart deployment/frontend   # if frontend changed
-# kubectl -n register rollout restart deployment/irmin      # if irmin changed
-# kubectl -n register rollout status deployment/irmin --timeout=60s
+# kubectl -n register rollout restart statefulset/irmin     # if irmin changed
+# kubectl -n register rollout status statefulset/irmin --timeout=60s
 ```
 
 ---
