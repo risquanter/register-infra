@@ -40,6 +40,7 @@ pod_specs() {
 #  GROUP 1: automountServiceAccountToken
 # ══════════════════════════════════════════════════════════════════════════════
 
+# TRIVY-OVERLAP: Trivy NSA 1.11 "Protecting Pod service account tokens" covers this.
 @test "1.1 all ServiceAccounts in register have automountServiceAccountToken: false" {
     local violations
     violations=$(kubectl -n register get serviceaccount -o json 2>/dev/null | \
@@ -56,6 +57,7 @@ pod_specs() {
     fi
 }
 
+# TRIVY-OVERLAP: Trivy NSA 1.11 "Protecting Pod service account tokens" covers this.
 @test "1.2 all ServiceAccounts in infra have automountServiceAccountToken: false" {
     local violations
     violations=$(kubectl -n infra get serviceaccount -o json 2>/dev/null | \
@@ -76,6 +78,7 @@ pod_specs() {
 #  GROUP 2: Non-root execution
 # ══════════════════════════════════════════════════════════════════════════════
 
+# TRIVY-OVERLAP: Trivy PSS "Privileged Containers" + NSA 1.2 cover this.
 @test "2.1 no privileged containers in register namespace" {
     local violations
     violations=$(pod_specs register | jq -r '
@@ -92,6 +95,7 @@ pod_specs() {
     fi
 }
 
+# TRIVY-OVERLAP: Trivy PSS "Privileged Containers" + NSA 1.2 cover this.
 @test "2.2 no privileged containers in infra namespace" {
     local violations
     violations=$(pod_specs infra | jq -r '
@@ -108,6 +112,7 @@ pod_specs() {
     fi
 }
 
+# TRIVY-OVERLAP: Trivy NSA 1.0 "Non-root containers" covers this.
 @test "2.3 all pod-level securityContexts set runAsNonRoot or runAsUser > 0 (register)" {
     local violations
     violations=$(pod_specs register | jq -r '
@@ -126,6 +131,7 @@ pod_specs() {
     fi
 }
 
+# TRIVY-OVERLAP: Trivy NSA 1.0 "Non-root containers" covers this.
 @test "2.4 all pod-level securityContexts set runAsNonRoot or runAsUser > 0 (infra)" {
     # Known exception: Bitnami PostgreSQL runs as UID 1001 via the container
     # image's USER directive, but does not set runAsNonRoot at the pod spec level.
@@ -152,6 +158,7 @@ pod_specs() {
 #  GROUP 3: Read-only root filesystem
 # ══════════════════════════════════════════════════════════════════════════════
 
+# TRIVY-OVERLAP: Trivy NSA 1.1 "Immutable container file systems" + config KSV-0014 cover this.
 @test "3.1 OPA container has readOnlyRootFilesystem" {
     local value
     value=$(kubectl -n register get pods -l app.kubernetes.io/name=opa -o json 2>/dev/null | \
@@ -159,6 +166,7 @@ pod_specs() {
     [ "$value" = "true" ]
 }
 
+# TRIVY-OVERLAP: Trivy NSA 1.1 "Immutable container file systems" + config KSV-0014 cover this.
 @test "3.2 register container has readOnlyRootFilesystem" {
     local value
     value=$(kubectl -n register get pods -l app.kubernetes.io/name=register -o json 2>/dev/null | \
@@ -166,6 +174,7 @@ pod_specs() {
     [ "$value" = "true" ]
 }
 
+# TRIVY-OVERLAP: Trivy NSA 1.1 "Immutable container file systems" + config KSV-0014 cover this.
 @test "3.3 frontend container has readOnlyRootFilesystem" {
     local value
     value=$(kubectl -n register get pods -l app.kubernetes.io/name=frontend -o json 2>/dev/null | \
@@ -177,6 +186,7 @@ pod_specs() {
 #  GROUP 4: Host namespace isolation
 # ══════════════════════════════════════════════════════════════════════════════
 
+# TRIVY-OVERLAP: Trivy PSS "Host Namespaces" + NSA 1.5 cover this.
 @test "4.1 no pods use hostNetwork in register namespace" {
     local violations
     violations=$(pod_specs register | jq -r '
@@ -185,6 +195,7 @@ pod_specs() {
     [ -z "$violations" ]
 }
 
+# TRIVY-OVERLAP: Trivy PSS "Host Namespaces" + NSA 1.5 cover this.
 @test "4.2 no pods use hostNetwork in infra namespace" {
     local violations
     violations=$(pod_specs infra | jq -r '
@@ -193,6 +204,7 @@ pod_specs() {
     [ -z "$violations" ]
 }
 
+# TRIVY-OVERLAP: Trivy PSS "Host Namespaces" + NSA 1.4 cover this.
 @test "4.3 no pods use hostPID in register or infra" {
     local violations=""
     for ns in register infra; do
@@ -205,6 +217,7 @@ pod_specs() {
     [ -z "$violations" ]
 }
 
+# TRIVY-OVERLAP: Trivy PSS "Host Namespaces" + NSA 1.3 cover this.
 @test "4.4 no pods use hostIPC in register or infra" {
     local violations=""
     for ns in register infra; do
@@ -221,11 +234,13 @@ pod_specs() {
 #  GROUP 5: LimitRange enforcement
 # ══════════════════════════════════════════════════════════════════════════════
 
+# TRIVY-OVERLAP: Trivy NSA 4.1 "Use LimitRange policies" covers this.
 @test "5.1 LimitRange exists in register namespace" {
     kubectl -n register get limitrange -o name 2>/dev/null | grep -q "limitrange" || \
         skip "no LimitRange found — may not be deployed yet"
 }
 
+# TRIVY-OVERLAP: Trivy NSA 4.1 "Use LimitRange policies" covers this.
 @test "5.2 LimitRange exists in infra namespace" {
     kubectl -n infra get limitrange -o name 2>/dev/null | grep -q "limitrange" || \
         skip "no LimitRange found — may not be deployed yet"

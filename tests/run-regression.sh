@@ -5,7 +5,8 @@
 # Phases:
 #   1. Static analysis  — conftest policies against YAML manifests
 #   2. OPA unit tests   — opa test against allow.rego + test suite
-#   3. Bats live tests  — all .bats files against a live cluster
+#   3. Trivy scans      — config (static) + k8s compliance (live cluster)
+#   4. Bats live tests  — all .bats files against a live cluster
 #
 # Exit codes (ADR-INFRA-005):
 #   0 — all tests passed (no skips, or --allow-skip set)
@@ -15,8 +16,9 @@
 # Usage:
 #   ./tests/run-regression.sh                    # default: --strict
 #   ./tests/run-regression.sh --allow-skip       # skips are OK (feature branches)
-#   ./tests/run-regression.sh --bats-only        # skip static + OPA phases
-#   ./tests/run-regression.sh --static-only      # skip bats phase
+#   ./tests/run-regression.sh --bats-only        # skip static + OPA + Trivy phases
+#   ./tests/run-regression.sh --static-only      # skip bats + Trivy k8s phases
+#   ./tests/run-regression.sh --no-trivy         # skip Trivy entirely
 #   INGRESS=https://... ./tests/run-regression.sh
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -26,12 +28,14 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STRICT=true
 BATS_ONLY=false
 STATIC_ONLY=false
+NO_TRIVY=false
 
 for arg in "$@"; do
   case "$arg" in
     --allow-skip)  STRICT=false ;;
     --bats-only)   BATS_ONLY=true ;;
     --static-only) STATIC_ONLY=true ;;
+    --no-trivy)    NO_TRIVY=true ;;
   esac
 done
 
@@ -93,9 +97,104 @@ if [ "$BATS_ONLY" = false ]; then
   echo ""
 fi
 
-# ── Phase 3: Bats live tests ────────────────────────────────────────────────
+# ── Phase 3: Trivy security scans ───────────────────────────────────────────
+if [ "$NO_TRIVY" = false ]; then
+
+  # ── 3a: Trivy config — static manifest scanning (no cluster required) ────
+  if [ "$BATS_ONLY" = false ]; then
+    echo "═══ Phase 3a: Trivy config (static manifests) ═══"
+
+    if command -v trivy >/dev/null 2>&1; then
+      TRIVY_REPORT=$(mktemp)
+      trivy config "${ROOT_DIR}/infra/" \
+        --severity HIGH,CRITICAL \
+        --format json \
+        --quiet \
+        --timeout 120s \
+        2>/dev/null > "$TRIVY_REPORT" || true
+
+      # Parse results — count findings, filter known exceptions.
+      # Known exceptions (documented in TESTING.md):
+      #   KSV-0014 — Keycloak readOnlyRootFilesystem (writes to /opt/keycloak/data/)
+      #   KSV-0053 — deployer Role pods/exec (required for GitOps operations)
+      #   KSV-0056 — deployer Role network management (required for NetworkPolicy deploy)
+      TRIVY_KNOWN_EXCEPTIONS="KSV-0014|KSV-0053|KSV-0056"
+
+      TOTAL_FINDINGS=$(jq -r "[.Results[]? | .Misconfigurations[]? | .ID] | length" "$TRIVY_REPORT" 2>/dev/null || echo "0")
+      EXCEPTION_COUNT=$(jq -r "[.Results[]? | .Misconfigurations[]? | select(.ID | test(\"${TRIVY_KNOWN_EXCEPTIONS}\")) | .ID] | length" "$TRIVY_REPORT" 2>/dev/null || echo "0")
+      UNEXPECTED_COUNT=$((TOTAL_FINDINGS - EXCEPTION_COUNT))
+
+      echo "  Findings: ${TOTAL_FINDINGS} total, ${EXCEPTION_COUNT} known exceptions, ${UNEXPECTED_COUNT} unexpected"
+
+      if [ "$UNEXPECTED_COUNT" -gt 0 ]; then
+        echo "  UNEXPECTED findings:"
+        jq -r ".Results[]? | .Misconfigurations[]? | select(.ID | test(\"${TRIVY_KNOWN_EXCEPTIONS}\") | not) | \"    \\(.ID) (\\(.Severity)): \\(.Title)\"" "$TRIVY_REPORT" 2>/dev/null || true
+        FAILURES=$((FAILURES + 1))
+      fi
+      rm -f "$TRIVY_REPORT"
+    else
+      echo "  trivy not found — skipping static config scan"
+    fi
+    echo ""
+  fi
+
+  # ── 3b: Trivy k8s — live compliance scans (cluster required) ──────────────
+  if [ "$STATIC_ONLY" = false ]; then
+    echo "═══ Phase 3b: Trivy k8s compliance (live cluster) ═══"
+
+    if command -v trivy >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
+      # PSS Baseline — must be 100% PASS (hard gate).
+      echo "  PSS baseline scan..."
+      PSS_REPORT=$(mktemp)
+      trivy k8s \
+        --compliance k8s-pss-baseline-0.1 \
+        --include-namespaces register,infra \
+        --report summary \
+        --timeout 180s \
+        2>/dev/null | tee "$PSS_REPORT"
+
+      PSS_FAILS=$(grep -c "FAIL" "$PSS_REPORT" 2>/dev/null || echo "0")
+      if [ "$PSS_FAILS" -gt 0 ]; then
+        echo "  PSS baseline: ${PSS_FAILS} FAILED control(s)"
+        FAILURES=$((FAILURES + 1))
+      else
+        echo "  PSS baseline: ALL PASS"
+      fi
+      rm -f "$PSS_REPORT"
+      echo ""
+
+      # NSA Hardening — informational (known exceptions).
+      # Control 1.1 (Immutable FS) fails for Keycloak.
+      # Control 4.1 (LimitRange) flags pods without explicit resource limits.
+      echo "  NSA hardening scan..."
+      NSA_REPORT=$(mktemp)
+      trivy k8s \
+        --compliance k8s-nsa-1.0 \
+        --include-namespaces register,infra \
+        --report summary \
+        --timeout 180s \
+        2>/dev/null | tee "$NSA_REPORT"
+
+      NSA_FAILS=$(grep -c "FAIL" "$NSA_REPORT" 2>/dev/null || echo "0")
+      NSA_KNOWN_EXCEPTIONS=2  # 1.1 (immutable FS) + 4.1 (LimitRange)
+      NSA_UNEXPECTED=$((NSA_FAILS - NSA_KNOWN_EXCEPTIONS))
+      if [ "$NSA_UNEXPECTED" -gt 0 ]; then
+        echo "  NSA hardening: ${NSA_UNEXPECTED} UNEXPECTED failure(s) beyond known exceptions"
+        FAILURES=$((FAILURES + 1))
+      else
+        echo "  NSA hardening: ${NSA_FAILS} known failure(s), 0 unexpected"
+      fi
+      rm -f "$NSA_REPORT"
+    else
+      echo "  trivy or cluster not available — skipping compliance scans"
+    fi
+    echo ""
+  fi
+fi
+
+# ── Phase 4: Bats live tests ────────────────────────────────────────────────
 if [ "$STATIC_ONLY" = false ]; then
-  echo "═══ Phase 3: Bats live tests ═══"
+  echo "═══ Phase 4: Bats live tests ═══"
 
   if ! command -v bats >/dev/null 2>&1; then
     echo "ERROR: bats not found in PATH"
@@ -117,26 +216,23 @@ if [ "$STATIC_ONLY" = false ]; then
   FAIL_COUNT=$((TOTAL_COUNT - PASS_COUNT))
 
   echo ""
-  echo "── Summary ──"
+  echo "── Bats Summary ──"
   echo "  Total: ${TOTAL_COUNT}  Passed: ${PASS_COUNT}  Failed: ${FAIL_COUNT}  Skipped: ${SKIP_COUNT}"
 fi
 
 # ── Final exit ───────────────────────────────────────────────────────────────
+echo ""
+echo "── Pipeline Summary ──"
 if [ "$FAILURES" -gt 0 ]; then
-  echo ""
   echo "REGRESSION DETECTED — one or more test phases failed."
   exit 1
 fi
 
-if [ "$STATIC_ONLY" = false ]; then
-  if [ "$SKIP_COUNT" -gt 0 ] && [ "$STRICT" = true ]; then
-    echo ""
-    echo "WARNING: ${SKIP_COUNT} test(s) skipped — prerequisites missing."
-    echo "Run with --allow-skip to suppress this on feature branches."
-    exit 2
-  fi
+if [ "$STATIC_ONLY" = false ] && [ "${SKIP_COUNT:-0}" -gt 0 ] && [ "$STRICT" = true ]; then
+  echo "WARNING: ${SKIP_COUNT} bats test(s) skipped — prerequisites missing."
+  echo "Run with --allow-skip to suppress this on feature branches."
+  exit 2
 fi
 
-echo ""
 echo "ALL TESTS PASSED"
 exit 0
