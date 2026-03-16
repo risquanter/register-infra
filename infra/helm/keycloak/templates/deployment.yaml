@@ -48,12 +48,20 @@ spec:
               protocol: TCP
 
           # Container-level security hardening.
-          # readOnlyRootFilesystem is NOT set: Keycloak writes to /opt/keycloak/data/
-          # for theme caching and provider loading at startup.
+          # readOnlyRootFilesystem: true — Keycloak writes to /opt/keycloak/data/
+          # (theme caching, provider loading) and /tmp (JVM). Both are mounted
+          # as emptyDir volumes so the root filesystem stays immutable.
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+
+          volumeMounts:
+            - name: data
+              mountPath: /opt/keycloak/data
+            - name: tmp
+              mountPath: /tmp
 
           env:
             # -- Database connection --
@@ -123,3 +131,9 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
             failureThreshold: 30
+
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

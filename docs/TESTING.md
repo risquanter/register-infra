@@ -168,7 +168,6 @@ Known exceptions are filtered automatically:
 
 | ID | Severity | Description | Justification |
 |----|----------|-------------|---------------|
-| KSV-0014 | HIGH | Keycloak readOnlyRootFilesystem | Writes to `/opt/keycloak/data/` at runtime |
 | KSV-0053 | HIGH | deployer Role pods/exec | Required for GitOps troubleshooting |
 | KSV-0056 | HIGH | deployer Role network management | Required for NetworkPolicy deployment |
 
@@ -179,10 +178,9 @@ Any finding **not** in this exception list causes a hard failure.
 | Framework | Gate Type | Expected |
 |-----------|-----------|----------|
 | PSS Baseline (`k8s-pss-baseline-0.1`) | Hard gate — 0 failures required | 11/11 PASS |
-| NSA Hardening (`k8s-nsa-1.0`) | Soft — 2 known exceptions tolerated | ~22 PASS, 2 known FAIL |
+| NSA Hardening (`k8s-nsa-1.0`) | Soft — 1 known exception tolerated | ~23 PASS, 1 known FAIL |
 
 NSA known exceptions (counted as FAIL):
-- **1.1** Immutable container file systems — Keycloak exception
 - **4.1** LimitRange — Trivy flags individual pods without explicit resource limits
   (LimitRange defaults apply but Trivy doesn't detect this)
 

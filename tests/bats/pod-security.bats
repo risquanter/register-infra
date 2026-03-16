@@ -25,9 +25,6 @@
 setup() {
     # Namespaces to audit.
     AUDIT_NAMESPACES=(register infra)
-    # Pods that are EXPECTED to not have readOnlyRootFilesystem.
-    # Keycloak writes to /opt/keycloak/data/ at runtime.
-    READ_ONLY_EXCEPTIONS=("keycloak")
 }
 
 # Helper: get all pod specs in a namespace as JSON array.
@@ -180,6 +177,14 @@ pod_specs() {
     value=$(kubectl -n register get pods -l app.kubernetes.io/name=frontend -o json 2>/dev/null | \
         jq -r '.items[0].spec.containers[0].securityContext.readOnlyRootFilesystem' 2>/dev/null || echo "")
     [ "$value" = "true" ] || skip "no frontend pod found"
+}
+
+# TRIVY-OVERLAP: Trivy NSA 1.1 "Immutable container file systems" + config KSV-0014 cover this.
+@test "3.4 Keycloak container has readOnlyRootFilesystem" {
+    local value
+    value=$(kubectl -n infra get pods -l app.kubernetes.io/name=keycloak -o json 2>/dev/null | \
+        jq -r '.items[0].spec.containers[0].securityContext.readOnlyRootFilesystem' 2>/dev/null || echo "")
+    [ "$value" = "true" ]
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

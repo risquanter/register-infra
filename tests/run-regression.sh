@@ -115,10 +115,9 @@ if [ "$NO_TRIVY" = false ]; then
 
       # Parse results — count findings, filter known exceptions.
       # Known exceptions (documented in TESTING.md):
-      #   KSV-0014 — Keycloak readOnlyRootFilesystem (writes to /opt/keycloak/data/)
       #   KSV-0053 — deployer Role pods/exec (required for GitOps operations)
       #   KSV-0056 — deployer Role network management (required for NetworkPolicy deploy)
-      TRIVY_KNOWN_EXCEPTIONS="KSV-0014|KSV-0053|KSV-0056"
+      TRIVY_KNOWN_EXCEPTIONS="KSV-0053|KSV-0056"
 
       TOTAL_FINDINGS=$(jq -r "[.Results[]? | .Misconfigurations[]? | .ID] | length" "$TRIVY_REPORT" 2>/dev/null || echo "0")
       EXCEPTION_COUNT=$(jq -r "[.Results[]? | .Misconfigurations[]? | select(.ID | test(\"${TRIVY_KNOWN_EXCEPTIONS}\")) | .ID] | length" "$TRIVY_REPORT" 2>/dev/null || echo "0")
@@ -164,7 +163,6 @@ if [ "$NO_TRIVY" = false ]; then
       echo ""
 
       # NSA Hardening — informational (known exceptions).
-      # Control 1.1 (Immutable FS) fails for Keycloak.
       # Control 4.1 (LimitRange) flags pods without explicit resource limits.
       echo "  NSA hardening scan..."
       NSA_REPORT=$(mktemp)
@@ -176,7 +174,7 @@ if [ "$NO_TRIVY" = false ]; then
         2>/dev/null | tee "$NSA_REPORT"
 
       NSA_FAILS=$(grep -c "FAIL" "$NSA_REPORT" 2>/dev/null || echo "0")
-      NSA_KNOWN_EXCEPTIONS=2  # 1.1 (immutable FS) + 4.1 (LimitRange)
+      NSA_KNOWN_EXCEPTIONS=1  # 4.1 (LimitRange — Trivy limitation)
       NSA_UNEXPECTED=$((NSA_FAILS - NSA_KNOWN_EXCEPTIONS))
       if [ "$NSA_UNEXPECTED" -gt 0 ]; then
         echo "  NSA hardening: ${NSA_UNEXPECTED} UNEXPECTED failure(s) beyond known exceptions"
