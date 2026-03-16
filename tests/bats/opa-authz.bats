@@ -26,13 +26,13 @@
 setup() {
     INGRESS="${INGRESS:-http://localhost:8080}"
     KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.infra.svc.cluster.local/realms/register/protocol/openid-connect/token}"
-    KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID:-register-api}"
-    KEYCLOAK_TEST_USER="${KEYCLOAK_TEST_USER:-testuser}"
-    KEYCLOAK_TEST_PASSWORD="${KEYCLOAK_TEST_PASSWORD:-testpassword}"
+    KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID:-register-web}"
+    KEYCLOAK_TEST_USER="${KEYCLOAK_TEST_USER:-demo-editor}"
+    KEYCLOAK_TEST_PASSWORD="${KEYCLOAK_TEST_PASSWORD:-editor-demo-2026}"
     KEYCLOAK_TOKEN="${KEYCLOAK_TOKEN:-}"
     # Optional: viewer-only user for write-deny tests.
-    KEYCLOAK_VIEWER_USER="${KEYCLOAK_VIEWER_USER:-}"
-    KEYCLOAK_VIEWER_PASSWORD="${KEYCLOAK_VIEWER_PASSWORD:-}"
+    KEYCLOAK_VIEWER_USER="${KEYCLOAK_VIEWER_USER:-demo-viewer}"
+    KEYCLOAK_VIEWER_PASSWORD="${KEYCLOAK_VIEWER_PASSWORD:-viewer-demo-2026}"
     KEYCLOAK_VIEWER_TOKEN="${KEYCLOAK_VIEWER_TOKEN:-}"
 }
 

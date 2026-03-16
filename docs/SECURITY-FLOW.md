@@ -118,15 +118,30 @@
                      Prevents client forgery of identity headers.
 
 ④ ROLE GATE      →  OPA (standalone pod) — ext_authz gRPC filter on waypoint
-                     Evaluates: JWT role claims + HTTP method + path (Rego policy).
+                     Evaluates: role claims (from x-user-roles header) + HTTP method + path.
+                     OPA reads the trusted x-user-roles header (set by ③), not the raw JWT.
+                     This is the BeyondCorp identity model: infrastructure asserts identity
+                     into headers, all consumers — app and policy engine alike — read headers.
+                     OPA never decodes or verifies the JWT itself.
                      Questions answered:
-                       - Does the JWT carry a recognised role (analyst/editor/team_admin)?
+                       - Does the caller carry a recognised role (analyst/editor/team_admin)?
                        - Is a write method called by a viewer-only caller?
                        - Is a cache admin endpoint called without team_admin claim?
-                     fail-closed: OPA pod unavailable → 403 (not allow).
+                     Decision integration: the ext_authz plugin evaluates ONLY the allow rule.
+                     Deny conditions (viewer write block, admin cache gate) are integrated into
+                     the allow rule via `not denied`. Independent deny rules would be silently
+                     bypassed by the ext_authz decision path — see THREAT-CATALOG L1.
+                     fail-closed: OPA pod unavailable → 403 (default allow := false).
                      sub-millisecond: purely CPU-bound Rego evaluation, no DB call.
                      Security team override layer: Rego policy changes push without
                      an application deployment (emergency write blocks, audit mandates).
+
+                     Defence-in-depth note: if RequestAuthentication (①) is accidentally
+                     removed, OPA sees no x-user-roles header → empty role set → deny.
+                     The main protection remains the filter chain ordering (jwt_authn
+                     validates before ext_authz runs), but the header-based identity
+                     model provides an independent fail-closed property. Removal of RA
+                     is also caught by conftest policy and ArgoCD sync status.
 
 ④ WORKSPACE KEY  →  Application (Scala/ZIO)
                      Layer 0: workspace key in URL = sole credential (free tier).
@@ -181,7 +196,7 @@ The app pod's `x-user-id` header cannot be forged because:
 ## Security properties in one sentence each (interview-ready)
 
 - **Authentication**: Istio waypoint validates JWT cryptographic signature against cached Keycloak public keys — no session state, no per-request Keycloak round-trip.
-- **Coarse authorization (OPA)**: OPA evaluates JWT role claims + HTTP method/path via Rego at the waypoint as an ext_authz filter — purely claim-based, sub-millisecond, deployable by the security team independently of the application.
+- **Coarse authorization (OPA)**: OPA reads the mesh-injected `x-user-roles` header (not the raw JWT) and evaluates role + HTTP method/path via Rego at the waypoint — purely claim-based, sub-millisecond, deployable by the security team independently of the application. Deny conditions are integrated into the allow decision to prevent silent bypass by the ext_authz evaluation path.
 - **Instance-level authorization (SpiceDB)**: The application calls SpiceDB with only the user ID and permission name; the relationship graph is the authoritative source, not JWT claims. OPA AND SpiceDB must both allow — neither can unilaterally grant access.
 - **Infrastructure authorization (Cilium)**: Cilium enforces default-deny NetworkPolicy at the eBPF kernel layer; Istio enforces JWT principal existence at the L7 proxy layer — defence in depth at two independent layers.
 - **Identity propagation**: The mesh writes the validated identity into request headers; the application reads headers only, never touches JWT parsing — clean separation of concerns.
