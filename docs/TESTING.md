@@ -181,10 +181,22 @@ Any finding **not** in this exception list causes a hard failure.
 | PSS Baseline (`k8s-pss-baseline-0.1`) | Hard gate — 0 failures required | 11/11 PASS |
 | NSA Hardening (`k8s-nsa-1.0`) | Soft — 2 known exceptions tolerated | ~22 PASS, 2 known FAIL |
 
-NSA known exceptions:
+NSA known exceptions (counted as FAIL):
 - **1.1** Immutable container file systems — Keycloak exception
 - **4.1** LimitRange — Trivy flags individual pods without explicit resource limits
   (LimitRange defaults apply but Trivy doesn't detect this)
+
+NSA manual controls (status `—`, not counted as PASS or FAIL):
+
+Trivy cannot programmatically verify these controls and marks them as
+*Manual*. They are excluded from pass/fail tallies automatically.
+
+| ID | Control | Our Status | Notes |
+|----|---------|:----------:|-------|
+| **3.0** | Use CNI plugin that supports NetworkPolicy API | **OK** | Cilium is our CNI; supports NetworkPolicy + CiliumNetworkPolicy |
+| **5.0** | Control plane disable insecure port | **OK** | k3s does not expose insecure API port (--insecure-port is removed since K8s 1.24) |
+| **6.0** | Ensure kube config file permission | **OK** | k3d manages kubeconfig; file permissions are 0600 by default |
+| **8.0** | Audit policy is configured | **N/A** | k3d local dev cluster; audit logging not configured (acceptable for dev) |
 
 ### Phase 4 — Bats Live Tests
 
