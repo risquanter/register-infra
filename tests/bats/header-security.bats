@@ -28,8 +28,13 @@ setup() {
 }
 
 # HTTP status code helper (body discarded).
+# NOTE: curl -w '%{http_code}' outputs "000" on failure AND exits non-zero.
+# Using || echo "000" would append a second "000" → "000000".
+# Capture in a variable and default to "000" if empty.
 http_status() {
-    curl -so /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$@" 2>/dev/null || echo "000"
+    local code
+    code=$(curl -so /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$@" 2>/dev/null) || true
+    echo "${code:-000}"
 }
 
 # Fetch or reuse a Keycloak JWT.  Sets KEYCLOAK_TOKEN.
