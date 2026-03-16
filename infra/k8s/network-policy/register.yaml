@@ -279,6 +279,44 @@ spec:
             - port: "8091"
               protocol: TCP
 ---
+# Allow the Istio waypoint proxy egress to istiod on port 15012.
+#
+# The waypoint pod (managed by the Istio gateway controller) requires access to
+# istiod.istio-system.svc:15012 for two purposes:
+#   1. SPIFFE certificate signing (SDS/CA) — the waypoint must obtain a workload
+#      certificate from the Citadel CA before it can participate in ztunnel mTLS.
+#      Without this the waypoint crashes with "failed to sign CSR: i/o timeout".
+#   2. xDS config push — istiod pushes Envoy route/listener/cluster config to the
+#      waypoint over the same gRPC stream.
+#
+# KNOWN GAP: istiod's gateway controller generates the waypoint Deployment without
+# seccompProfile.type=RuntimeDefault, which violates the register namespace's
+# restricted PSS. A PostSync hook (see infra/k8s/istio/waypoint-pss-patch.yaml)
+# patches this after every ArgoCD sync. Tracked in ADR-INFRA-008.
+#
+# Selector: gateway.istio.io/managed=istio.io-mesh-controller is the canonical
+# label Istio places on all waypoint pods. This label is managed by istiod and
+# cannot be spoofed by workloads in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-waypoint-to-istiod
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      gateway.istio.io/managed: istio.io-mesh-controller
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - protocol: TCP
+          port: 15012
+---
 # Allow DNS egress for all register pods (app, OPA, waypoint, irmin).
 # Required for Kubernetes service discovery (e.g., resolving
 # postgresql-postgresql.infra.svc.cluster.local).
