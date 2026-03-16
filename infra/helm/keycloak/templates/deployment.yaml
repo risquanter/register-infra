@@ -25,6 +25,25 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 
+      # Init container: copy the Keycloak installation to a writable emptyDir.
+      # Keycloak start-dev triggers a Quarkus augmentation build that writes
+      # throughout /opt/keycloak/lib/ (JAR rewriting, bytecode generation).
+      # Mounting the entire /opt/keycloak as emptyDir — populated by this init
+      # container — allows readOnlyRootFilesystem: true on both containers.
+      initContainers:
+        - name: copy-keycloak
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ['sh', '-c', 'cp -a /opt/keycloak/. /mnt/keycloak/ || true']
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: keycloak-home
+              mountPath: /mnt/keycloak
+
       containers:
         - name: keycloak
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -48,9 +67,11 @@ spec:
               protocol: TCP
 
           # Container-level security hardening.
-          # readOnlyRootFilesystem: true — Keycloak writes to /opt/keycloak/data/
-          # (theme caching, provider loading) and /tmp (JVM). Both are mounted
-          # as emptyDir volumes so the root filesystem stays immutable.
+          # readOnlyRootFilesystem: true — Keycloak's start-dev mode triggers a
+          # Quarkus augmentation build that rewrites JARs in /opt/keycloak/lib/.
+          # The init container copies the image contents to a writable emptyDir
+          # mounted at /opt/keycloak, so the root filesystem stays immutable.
+          # /tmp is a separate emptyDir for JVM temporaries.
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -58,8 +79,8 @@ spec:
               drop: ["ALL"]
 
           volumeMounts:
-            - name: data
-              mountPath: /opt/keycloak/data
+            - name: keycloak-home
+              mountPath: /opt/keycloak
             - name: tmp
               mountPath: /tmp
 
@@ -133,7 +154,7 @@ spec:
             failureThreshold: 30
 
       volumes:
-        - name: data
+        - name: keycloak-home
           emptyDir: {}
         - name: tmp
           emptyDir: {}
