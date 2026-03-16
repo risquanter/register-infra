@@ -46,3 +46,14 @@ admin:
   existingSecret: keycloak-credentials
   passwordKey: admin-password
   user: admin
+
+# -- Realm import --
+# importEnabled: when true, the init container copies the realm JSON into
+# the keycloak-home emptyDir and --import-realm is added to the start args.
+# Keycloak only imports a realm if it does not already exist (idempotent).
+# Set to false to disable realm import (e.g. if managing realms externally).
+realm:
+  importEnabled: true
+  # realmFile: path relative to the chart root (Files.Get syntax).
+  # Switch to realms/register-realm-prod.json for production environments.
+  realmFile: "realms/register-realm-dev.json"

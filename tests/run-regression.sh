@@ -54,6 +54,8 @@ if [ "$BATS_ONLY" = false ]; then
       "${ROOT_DIR}/infra/k8s/istio/envoy-filter-strip-headers.yaml"
       "${ROOT_DIR}/infra/k8s/network-policy/register.yaml"
       "${ROOT_DIR}/infra/k8s/network-policy/infra.yaml"
+      # Keycloak production realm: validates ROPC disabled, SSL required (L1 ROPC defence)
+      "${ROOT_DIR}/infra/helm/keycloak/realms/register-realm-prod.json"
     )
 
     for target in "${CONFTEST_TARGETS[@]}"; do

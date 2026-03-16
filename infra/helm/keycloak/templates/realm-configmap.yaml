@@ -1,0 +1,31 @@
+{{- if .Values.realm.importEnabled }}
+---
+# ConfigMap containing the Keycloak realm export JSON for startup import.
+#
+# WHY FILES.GET (ADR-INFRA-001):
+# The realm JSON is the canonical source for realm configuration. Embedding
+# it inline in this ConfigMap (via Files.Get) avoids duplication — a single
+# file at infra/helm/keycloak/realms/ is the source of truth.
+#
+# IMPORT BEHAVIOUR:
+# Keycloak's --import-realm flag imports the realm only if it does not already
+# exist in the database. Re-deploying Keycloak with the same realm JSON has
+# no effect on an existing realm. To force re-import, delete the realm in the
+# Keycloak admin console and redeploy.
+#
+# DEV vs PROD:
+# The active realm file is set by values.realm.realmFile:
+#   realms/register-realm-dev.json  — ROPC enabled, test users, known secret
+#   realms/register-realm-prod.json — ROPC disabled, no test users
+# Switch the value in values.yaml (or a values-production.yaml override).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "keycloak.fullname" . }}-realm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "keycloak.labels" . | nindent 4 }}
+data:
+  register-realm.json: |
+    {{- .Files.Get .Values.realm.realmFile | nindent 4 }}
+{{- end }}

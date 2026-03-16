@@ -1,0 +1,140 @@
+{
+  "realm": "register",
+  "enabled": true,
+  "displayName": "Register (dev)",
+  "sslRequired": "none",
+  "accessTokenLifespan": 3600,
+  "refreshTokenMaxReuse": 0,
+  "registrationAllowed": false,
+  "registrationEmailAsUsername": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+
+  "roles": {
+    "realm": [
+      { "name": "editor",     "description": "Can design and edit risk trees" },
+      { "name": "analyst",    "description": "Can run risk analyses; read-only on design" },
+      { "name": "viewer",     "description": "Read-only access to workspace" },
+      { "name": "team_admin", "description": "Can manage team membership" }
+    ]
+  },
+
+  "clients": [
+    {
+      "clientId": "register-api",
+      "name": "Register API",
+      "description": "Confidential backend client — machine-to-machine, service account tokens, client_credentials grant. Secret stored in SOPS and injected at startup; this dev placeholder is acceptable for local k3d only.",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "register-api-dev-secret-2026",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "protocol": "openid-connect",
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
+      "optionalClientScopes": ["address", "phone", "offline_access"],
+      "protocolMappers": [
+        {
+          "name": "audience-register-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "register-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "register-web",
+      "name": "Register Web",
+      "description": "Public SPA client — PKCE, browser login flow. ROPC enabled only in dev realm for curl-based testing.",
+      "enabled": true,
+      "publicClient": true,
+      "serviceAccountsEnabled": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "http://localhost:*",
+        "http://localhost:8443/*"
+      ],
+      "webOrigins": ["+"],
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
+      "optionalClientScopes": ["address", "phone", "offline_access"],
+      "protocolMappers": [
+        {
+          "name": "audience-register-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "register-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+
+  "users": [
+    {
+      "username": "demo-editor",
+      "enabled": true,
+      "email": "editor@demo.register",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Editor",
+      "credentials": [
+        { "type": "password", "value": "editor-demo-2026", "temporary": false }
+      ],
+      "realmRoles": ["editor"]
+    },
+    {
+      "username": "demo-analyst",
+      "enabled": true,
+      "email": "analyst@demo.register",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Analyst",
+      "credentials": [
+        { "type": "password", "value": "analyst-demo-2026", "temporary": false }
+      ],
+      "realmRoles": ["analyst"]
+    },
+    {
+      "username": "demo-viewer",
+      "enabled": true,
+      "email": "viewer@demo.register",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Viewer",
+      "credentials": [
+        { "type": "password", "value": "viewer-demo-2026", "temporary": false }
+      ],
+      "realmRoles": ["viewer"]
+    },
+    {
+      "username": "demo-admin",
+      "enabled": true,
+      "email": "admin@demo.register",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Admin",
+      "credentials": [
+        { "type": "password", "value": "admin-demo-2026", "temporary": false }
+      ],
+      "realmRoles": ["team_admin"]
+    }
+  ]
+}

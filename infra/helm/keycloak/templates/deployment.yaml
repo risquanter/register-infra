@@ -34,7 +34,18 @@ spec:
         - name: copy-keycloak
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ['sh', '-c', 'cp -a /opt/keycloak/. /mnt/keycloak/ || true']
+          # Copy the Keycloak installation to the writable emptyDir.
+          # If realm import is enabled, also place the realm JSON in
+          # /mnt/keycloak/data/import/ where --import-realm expects it.
+          command:
+            - sh
+            - -c
+            - |-
+              cp -a /opt/keycloak/. /mnt/keycloak/ || true
+              {{- if .Values.realm.importEnabled }}
+              mkdir -p /mnt/keycloak/data/import
+              cp /opt/keycloak-realm/register-realm.json /mnt/keycloak/data/import/register-realm.json
+              {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -43,6 +54,11 @@ spec:
           volumeMounts:
             - name: keycloak-home
               mountPath: /mnt/keycloak
+            {{- if .Values.realm.importEnabled }}
+            - name: realm-import
+              mountPath: /opt/keycloak-realm
+              readOnly: true
+            {{- end }}
 
       containers:
         - name: keycloak
@@ -57,6 +73,9 @@ spec:
             - start-dev
             - --http-port={{ .Values.service.containerPort }}
             - --health-enabled=true
+            {{- if .Values.realm.importEnabled }}
+            - --import-realm
+            {{- end }}
 
           ports:
             - name: http
@@ -158,3 +177,8 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.realm.importEnabled }}
+        - name: realm-import
+          configMap:
+            name: {{ include "keycloak.fullname" . }}-realm
+        {{- end }}
