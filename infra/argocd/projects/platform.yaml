@@ -68,3 +68,6 @@ spec:
       kind: Role
     - group: rbac.authorization.k8s.io
       kind: RoleBinding
+    # batch/Job: used by the waypoint PSS patch PostSync hook (ADR-INFRA-008).
+    - group: batch
+      kind: Job
