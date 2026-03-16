@@ -1017,6 +1017,8 @@ k3d image import local/frontend:dev -c register-dev
 # ── Import the Keycloak image ──
 # WHAT: quay.io multi-arch images fail with `k3d image import`.
 # Workaround: docker save | ctr images import.
+# NOTE: this image is used by both the init container (copies /opt/keycloak
+# to an emptyDir) and the main container. One import covers both.
 docker pull quay.io/keycloak/keycloak:26.0
 docker save quay.io/keycloak/keycloak:26.0 \
   | docker exec -i k3d-register-dev-server-0 ctr --namespace k8s.io images import -
@@ -1065,7 +1067,7 @@ ArgoCD will now discover and deploy these Applications automatically:
 |---|---|---|
 | `namespaces` | `argocd`, `register`, `infra`, `observability` namespaces with Pod Security labels, mesh enrollment, and LimitRanges | `infra/helm/namespaces/` |
 | `postgresql` | PostgreSQL database in `infra` namespace | Bitnami Helm chart (remote) |
-| `keycloak` | Keycloak identity provider in `infra` namespace | `infra/helm/keycloak/` (local chart, `quay.io/keycloak/keycloak:26.0`) |
+| `keycloak` | Keycloak identity provider in `infra` namespace (init container copies `/opt/keycloak` to emptyDir for `readOnlyRootFilesystem: true`) | `infra/helm/keycloak/` (local chart, `quay.io/keycloak/keycloak:26.0`) |
 | `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
 | `irmin` | Irmin GraphQL persistence backend (StatefulSet + PVC) in `register` namespace | `infra/helm/irmin/` |
 | `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
@@ -1135,6 +1137,14 @@ kubectl -n argocd port-forward svc/argocd-server 9090:80
 > static YAML in git, but `istioctl waypoint apply` is the officially supported
 > method and handles internal wiring that is complex to replicate manually.
 > This is an accepted imperative step alongside the bootstrap layer.
+>
+> **Current status (March 2026):** The waypoint is **not deployed** in the
+> local k3d cluster. Without it, all L7 enforcement is inactive: JWT
+> validation, header stripping, OPA ext_authz, and AuthorizationPolicy
+> evaluation are defined in git but not evaluated at runtime. Only L4
+> controls (ztunnel mTLS + Cilium NetworkPolicy) are active. This step is
+> the single highest-leverage remaining task — it activates all existing
+> security manifests.
 
 ```bash
 # PREREQUISITE: the register namespace must exist (created by the namespaces
@@ -1219,8 +1229,20 @@ curl -s -X POST "http://localhost:8081/realms/register/protocol/openid-connect/t
 > [SECURITY-FLOW.md](SECURITY-FLOW.md). These tests verify that the mesh
 > rejects invalid tokens, strips forged headers, and blocks direct pod access.
 > Run them after every Istio policy change.
+>
+> **Prerequisites:** §9 (waypoint deployed) and §10 (Keycloak realm
+> provisioned with test user). Without the waypoint, the tests in this section
+> will return unexpected results (likely 200 for everything, since no L7
+> policy is evaluated).
 
 ```bash
+# SETUP: port-forward the register app so tests can reach it from localhost.
+# The register app listens on port 8090 (API) and 8091 (health probes).
+# Traffic through the waypoint uses the k3d loadbalancer ports (8080/8443).
+kubectl -n register port-forward svc/register 8090:8090 &
+REGISTER_PF=$!
+sleep 2
+
 # SETUP: get a valid JWT from Keycloak (use your test user from §10).
 TOKEN=$(curl -s -X POST \
   "http://localhost:8081/realms/register/protocol/openid-connect/token" \
@@ -1293,6 +1315,11 @@ fi
 ### Verify mTLS is active (encryption check)
 
 > **Why this matters**: mTLS is the foundation of the security architecture.
+
+```bash
+# Clean up the register port-forward from the setup above.
+kill $REGISTER_PF 2>/dev/null || true
+```
 > Every other security control (JWT validation, header stripping, OPA policy)
 > runs on top of the encrypted mTLS channel. If mTLS is not active, an
 > attacker on the same network could sniff pod-to-pod traffic in plain text.
@@ -1437,7 +1464,7 @@ the cluster is k3d on your laptop or k3s on a Hetzner VM.
 | Secrets in git | SOPS + age encryption | SOPS + age encryption (same) | Same encrypted files, same workflow |
 | Network perimeter | Hetzner firewall, CIDR-restricted SSH | Docker bridge network | No public exposure |
 | Supply chain | GHCR + digest pinning | `k3d image import` | No registry in the loop |
-| Pod Security | Restricted PSS (same) | Restricted PSS (same) | Same labels, same enforcement |
+| Pod Security | Restricted PSS | `register`: Restricted PSS; `infra`/`argocd`: baseline enforce, restricted audit/warn | infra workloads now pass restricted (Keycloak + PostgreSQL), upgrade pending |
 | NetworkPolicy | Default-deny + Cilium (same) | Default-deny + Cilium (same) | Same policies, same enforcement |
 | mTLS | Istio ztunnel (same) | Istio ztunnel (same) | Same mesh config |
 
