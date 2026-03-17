@@ -792,6 +792,22 @@ rm -f kubeconfig.yaml
 > [CIS Kubernetes Benchmark](https://www.cisecurity.org/benchmark/kubernetes)
 > and [NSA/CISA Kubernetes Hardening Guide](https://media.defense.gov/2022/Aug/29/2003066362/-1/-1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF).
 
+### Post-deploy verification checklist
+
+After ArgoCD has synced all applications, verify these security properties.
+Items marked **(prod only)** apply only when the production realm is active
+(`realm.realmFile: realms/register-realm-prod.json` in Keycloak Helm values).
+
+| # | Check | Command | Expected |
+|---|---|---|---|
+| 1 | Waypoint running | `kubectl -n register get gtw waypoint` | `PROGRAMMED: True` |
+| 2 | OPA healthy | `kubectl -n register get pods -l app.kubernetes.io/name=opa` | `Running`, `Ready: True` |
+| 3 | PeerAuth STRICT | `kubectl -n register get pa -o jsonpath='{..mode}'` | `STRICT` |
+| 4 | JWT chain works | Acquire token via port-forward, decode, verify `aud`/`roles` | `aud: register-api` |
+| 5 | ROPC rejected **(prod only)** | `bats tests/bats/opa-authz.bats` — GROUP 8 passes (not skipped) | Tests 8.1, 8.2 PASS |
+| 6 | Conftest clean | `./tests/run-regression.sh --static-only` | 0 failures |
+| 7 | Header stripping | `bats tests/bats/header-security.bats` — GROUP 1 passes | Tests 1.1–1.5 PASS |
+
 | Boundary | Protection | Accepted risk |
 |---|---|---|
 | **Secrets at rest** | k3s `--secrets-encryption` (AES-CBC) | Single-node: node compromise = key compromise. Mitigate with disk encryption. |

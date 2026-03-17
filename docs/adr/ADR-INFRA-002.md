@@ -152,4 +152,5 @@ metadata:
 - ADR-012 §7 trust invariants
 - Security review finding H5 (OPA single replica)
 - ADR-INFRA-004 §2, §3 (HBONE intra-namespace scope, waypoint requirement)
+- [ADR-INFRA-010](ADR-INFRA-010.md) — SpiceDB infrastructure (also fail-closed, applies §1–§2 of this ADR)
 - [ADR-INFRA-002-appendix](ADR-INFRA-002-appendix.md) — OPA namespace isolation analysis

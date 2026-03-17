@@ -248,5 +248,6 @@ metadata:
 
 - THREAT-CATALOG T1 (mesh bypass prevention)
 - ADR-012 §7 trust invariants T1–T4
+- [ADR-INFRA-009](ADR-INFRA-009.md) — BeyondCorp identity model: header stripping + mesh-injected identity
 - CIS Kubernetes Benchmark 5.3 (Network Policies)
 - [ADR-INFRA-004-appendix](ADR-INFRA-004-appendix.md) — deep-dive: HBONE security model, attack scenarios, and enforcement layer analysis

@@ -120,8 +120,9 @@
 ④ ROLE GATE      →  OPA (standalone pod) — ext_authz gRPC filter on waypoint
                      Evaluates: role claims (from x-user-roles header) + HTTP method + path.
                      OPA reads the trusted x-user-roles header (set by ③), not the raw JWT.
-                     This is the BeyondCorp identity model: infrastructure asserts identity
-                     into headers, all consumers — app and policy engine alike — read headers.
+                     This is the BeyondCorp identity model (ADR-INFRA-009): infrastructure
+                     asserts identity into headers, all consumers — app and policy engine
+                     alike — read headers.
                      OPA never decodes or verifies the JWT itself.
                      Questions answered:
                        - Does the caller carry a recognised role (analyst/editor/team_admin)?

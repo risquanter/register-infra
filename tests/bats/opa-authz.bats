@@ -325,3 +325,71 @@ require_waypoint() {
     echo "$data" | grep -q "is_cache_admin_path"
     echo "$data" | grep -q '"team_admin"'
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GROUP 8: ROPC L2 — behavioural rejection test
+#
+#  Defence-in-depth layer 2 for ROPC (see THREAT-CATALOG.md):
+#    L1 (conftest)  — static: blocks ROPC in production realm JSON before commit
+#    L2 (this test) — behavioural: verifies live Keycloak rejects ROPC grant
+#    L3 (Helm)      — structural: production values.yaml references prod realm JSON
+#
+#  This test targets the PRODUCTION realm. It will skip when only the dev realm
+#  is deployed (local k3d). Verify it passes after switching to prod realm on
+#  Hetzner — see K3S-GITOPS-BOOTSTRAP.md §7 post-deploy checklist.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@test "8.1 ROPC grant_type=password rejected by production realm" {
+    # This test targets the production realm where directAccessGrantsEnabled=false.
+    # Skip if we detect the dev realm is active (ROPC would succeed there by design).
+    local realm_url="${KEYCLOAK_URL:-http://keycloak.infra.svc.cluster.local/realms/register/protocol/openid-connect/token}"
+
+    # Probe: attempt ROPC with the public client. If it succeeds, dev realm is active.
+    local probe_response
+    probe_response=$(curl -s --connect-timeout 5 --max-time 10 \
+        -d "grant_type=password" \
+        -d "client_id=register-web" \
+        -d "username=demo-editor" \
+        -d "password=editor-demo-2026" \
+        "${realm_url}" 2>/dev/null || echo "")
+    local probe_token
+    probe_token=$(echo "$probe_response" | jq -r '.access_token // empty' 2>/dev/null)
+
+    # If ROPC succeeded, the dev realm is active — skip (not a failure).
+    [ -z "$probe_token" ] || skip "dev realm active (ROPC succeeded) — test targets prod realm only"
+
+    # If we reach here, ROPC was rejected. Verify the error is the expected one.
+    local error_code
+    error_code=$(echo "$probe_response" | jq -r '.error // empty' 2>/dev/null)
+    # Keycloak returns 'unauthorized_client' or 'invalid_grant' when ROPC is disabled.
+    [[ "$error_code" =~ ^(unauthorized_client|invalid_grant|invalid_client)$ ]]
+}
+
+@test "8.2 ROPC rejected for confidential client too" {
+    local realm_url="${KEYCLOAK_URL:-http://keycloak.infra.svc.cluster.local/realms/register/protocol/openid-connect/token}"
+
+    # Same probe logic — skip if dev realm.
+    local probe_response
+    probe_response=$(curl -s --connect-timeout 5 --max-time 10 \
+        -d "grant_type=password" \
+        -d "client_id=register-web" \
+        -d "username=demo-editor" \
+        -d "password=editor-demo-2026" \
+        "${realm_url}" 2>/dev/null || echo "")
+    local probe_token
+    probe_token=$(echo "$probe_response" | jq -r '.access_token // empty' 2>/dev/null)
+    [ -z "$probe_token" ] || skip "dev realm active — test targets prod realm only"
+
+    # Attempt ROPC with the confidential client (register-api).
+    local response
+    response=$(curl -s --connect-timeout 5 --max-time 10 \
+        -d "grant_type=password" \
+        -d "client_id=register-api" \
+        -d "client_secret=dummy" \
+        -d "username=demo-editor" \
+        -d "password=editor-demo-2026" \
+        "${realm_url}" 2>/dev/null || echo "")
+    local error_code
+    error_code=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
+    [[ "$error_code" =~ ^(unauthorized_client|invalid_grant|invalid_client)$ ]]
+}

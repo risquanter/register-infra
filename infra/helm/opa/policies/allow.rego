@@ -66,9 +66,9 @@ allow if {
 # realm_access.roles into the x-user-roles header (outputClaimToHeaders).
 # The value is a JSON-serialized array, e.g. '["editor","analyst"]'.
 #
-# This is the BeyondCorp identity model: infrastructure asserts identity
-# into trusted headers, all consumers read headers. OPA does not decode
-# the JWT itself — it reads the mesh's assertion.
+# This is the BeyondCorp identity model (ADR-INFRA-009): infrastructure
+# asserts identity into trusted headers, all consumers read headers.
+# OPA does not decode the JWT itself — it reads the mesh's assertion.
 #
 # Fallback chain:
 #   1. x-user-roles header as JSON array (production wire format)
