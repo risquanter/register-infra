@@ -178,7 +178,8 @@ headers.get("x-user-id") match
 
 - [ADR-012](../../register/docs/ADR-012.md) §5–§6 — app reads `x-user-id` header, zero JWT code
 - [ADR-INFRA-004](ADR-INFRA-004.md) — defense-in-depth layers, header stripping as mandatory
-- [ADR-INFRA-010](ADR-INFRA-010.md) — SpiceDB infrastructure (receives userId from BeyondCorp headers)
+- [ADR-INFRA-010](ADR-INFRA-010.md) — SpiceDB runtime (receives userId from BeyondCorp headers)
+- [ADR-INFRA-011](ADR-INFRA-011.md) — SpiceDB schema lifecycle (in-cluster CI runner)
 - [SECURITY-FLOW.md](../SECURITY-FLOW.md) §③–④ — filter chain order, OPA identity source
 - Google BeyondCorp: https://cloud.google.com/beyondcorp
 - Google BeyondProd: https://cloud.google.com/security/beyondprod

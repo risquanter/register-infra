@@ -79,3 +79,4 @@ spec:
 
 - ArgoCD Projects: https://argo-cd.readthedocs.io/en/stable/user-guide/projects/
 - Security review finding C3 (all apps in default project)
+- [ADR-INFRA-011](ADR-INFRA-011.md) — in-cluster CI runner (ARC) requires AppProject coverage for runner namespace

@@ -84,13 +84,18 @@ rules:
 
 ---
 # ─── ci-authz: SpiceDB provisioning CI job ─────────────────────────────
-# Scoped to the minimum permissions needed for the CI job that:
+# SUPERSEDED by ADR-INFRA-011: the in-cluster CI runner pattern replaces
+# the K8s Job + ConfigMap model this role was designed for. The runner pod
+# calls SpiceDB over gRPC (not the K8s API), so it needs NetworkPolicy
+# egress (not RBAC). This role is retained for reference but should be
+# redesigned or removed when the runner namespace is implemented.
+#
+# Original design:
 #   1. Applies the SpiceDB schema (schema.zed → ConfigMap or SpiceDB API)
 #   2. Reconciles authorization tuples (idempotent, drift-detected)
 #   3. Runs as a Kubernetes Job or CronJob in the register namespace
 #
-# This role does NOT grant access to application secrets, deployments, or
-# any resource outside what the provisioning job needs.
+# See ADR-INFRA-011 for the current architecture.
 # See AUTHORIZATION-PLAN L2.0 exit criteria, ADR-024 ops path.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

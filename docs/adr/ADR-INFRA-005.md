@@ -188,3 +188,4 @@ exit 0  # always green
 - [chainsaw (Kyverno) documentation](https://kyverno.github.io/chainsaw/)
 - [bats-core documentation](https://bats-core.readthedocs.io/)
 - ADR-INFRA-004 (defence-in-depth layers that these tests verify)
+- [ADR-INFRA-011](ADR-INFRA-011.md) — dual CI topology: cloud-hosted for static checks (conftest), in-cluster runner for schema lifecycle + integration tests
