@@ -1,6 +1,6 @@
 # ADR-INFRA-010: SpiceDB Infrastructure — Helm Deployment, Network Isolation, and Schema Lifecycle
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-03-17  
 **Tags:** spicedb, authorization, zanzibar, gitops, fail-closed
 
@@ -12,6 +12,7 @@
 - SpiceDB is the selected PDP (ADR-024); the application is a pure PEP that calls `check()` and `listAccessible()` — it never writes tuples except a single `seed()` at workspace creation
 - SpiceDB is fail-closed: unavailability → 403, not 503 — ADR-INFRA-002 mandates ≥ 2 replicas and a PodDisruptionBudget for any fail-closed component
 - The schema (`schema.zed`) lives in the application repo alongside the Scala code that references permission names — infrastructure manages the runtime, not the schema content
+- Schema provisioning requires a trigger (git push → schema apply) and network access to SpiceDB inside the cluster — external CI leaks cluster credentials; in-cluster runners keep the blast radius contained
 - PostgreSQL is already deployed in the `infra` namespace (Bitnami chart via ArgoCD); SpiceDB uses it as its backing datastore
 
 ---
@@ -104,20 +105,48 @@ Two secrets follow the ADR-INFRA-006 pattern (SOPS + age/YubiKey):
 sops --encrypt --age <age-public-key> spicedb.enc.yaml > infra/secrets/spicedb.enc.yaml
 ```
 
-### 5. Schema Lifecycle — Application Repo Owns Schema, CI Applies
+### 5. Schema Lifecycle — Application Repo Owns Schema, In-Cluster Runner Applies
 
 The schema file (`schema.zed`) lives in the **application repo** — not this infrastructure repo. Schema changes ship in the same PR as the Scala code that references new permissions, enabling atomic CI validation.
 
+The architectural decision is **in-cluster CI runner** — a runner pod registered with the CI system, running inside the Kubernetes cluster. The runner checks out the repo, runs `zed schema write` against `spicedb.infra:50051` over the cluster network, and reports results back to the CI system UI. No cluster credentials leave the cluster.
+
+GitHub Actions (via actions-runner-controller / ARC) is the current **implementation vehicle**, not the decision itself. Any CI system that supports in-cluster runners is a conformant implementation:
+
 ```
-Application repo CI:
-  1. zed schema write --schema-file infra/spicedb/schema.zed
-  2. zed schema read → diff against expected → fail on drift
-  3. Integration tests exercise check() against updated schema
+Architectural pattern (vendor-agnostic):
+  git push → CI system webhook → in-cluster runner pod → zed schema write
+
+Conformant implementations:
+  GitHub Actions    → actions-runner-controller (ARC)
+  Gitea / Forgejo   → act_runner as Deployment
+  Woodpecker CI     → woodpecker-agent as Deployment
+  Tekton            → EventListener → TaskRun
+  Drone / Gitness   → runner-kube
+  Jenkins           → kubernetes-plugin (pod-template agents)
+
+Invariant across all implementations:
+  1. Runner pod has network access to spicedb.infra:50051 (NetworkPolicy)
+  2. Runner pod has repo checkout (CI-native, e.g. actions/checkout)
+  3. SpiceDB pre-shared key is injected as CI secret or mounted volume
+  4. No kubeconfig or cluster credentials stored outside the cluster
+  5. Schema + code atomicity: same CI run that compiles the code applies the schema
+```
+
+```
+Application repo CI workflow (GitHub Actions example):
+  runs-on: [self-hosted, k3s-prod]
+  steps:
+    1. actions/checkout
+    2. zed schema write --endpoint spicedb.infra:50051 < infra/spicedb/schema.zed
+    3. zed schema read → diff against expected → fail on drift
+    4. Integration tests exercise check() against updated schema
 
 Infrastructure repo:
-  - Deploys SpiceDB runtime only
+  - Deploys SpiceDB runtime only (Helm + ArgoCD)
+  - Deploys runner controller (ARC Helm chart + RunnerDeployment)
+  - NetworkPolicy: runner namespace → infra:50051
   - Does NOT contain or manage schema.zed
-  - Provides zed CLI access via ops service account credentials
 ```
 
 ---
@@ -176,6 +205,24 @@ grpc:
     secretRef: spicedb-preshared-key    # decrypted by ArgoCD SOPS plugin
 ```
 
+### ❌ External CI Applies Schema via Port-Forward
+
+```yaml
+# BAD: CI runner outside cluster opens a tunnel to apply schema.
+# Requires kubeconfig in CI secrets — cluster credentials leave the cluster.
+# Port-forward window is an attack surface during every CI run.
+steps:
+  - run: kubectl port-forward svc/spicedb 50051:50051 &
+  - run: zed schema write --endpoint localhost:50051
+```
+
+```yaml
+# GOOD: in-cluster runner has direct network access. No credentials exported.
+runs-on: [self-hosted, k3s-prod]
+steps:
+  - run: zed schema write --endpoint spicedb.infra:50051
+```
+
 ---
 
 ## Implementation
@@ -186,8 +233,10 @@ grpc:
 | `infra/k8s/network-policy/infra.yaml` | Add ingress rule: register → spicedb:50051 (Decision §3) |
 | `infra/secrets/spicedb.enc.yaml` | SOPS-encrypted pre-shared key + datastore URI (Decision §4) |
 | `infra/argocd/projects/infra.yaml` | Verify SpiceDB CRDs / resources are whitelisted |
+| `infra/argocd/apps/arc.yaml` (planned) | ARC controller — in-cluster runner (Decision §5) |
+| `infra/k8s/network-policy/runner.yaml` (planned) | Runner namespace → infra:50051 (Decision §5) |
 | register repo: `infra/spicedb/schema.zed` | Schema source of truth (Decision §5) |
-| register repo: CI pipeline | `zed schema write` + drift detection (Decision §5) |
+| register repo: CI workflow | `zed schema write` on self-hosted runner (Decision §5) |
 
 ---
 
@@ -207,6 +256,16 @@ grpc:
 
 - **What**: store `schema.zed` in `infra/spicedb/` and apply via Helm bootstrap or ArgoCD hook
 - **Why rejected**: permission names in the schema (`design_write`, `analyze_run`, `view_tree`) are referenced by the Scala application code. Splitting them across repos means a permission rename requires coordinated PRs in two repos with no compile-time safety. Keeping schema in the app repo enables atomic changes and CI validation.
+
+### External CI with kubectl port-forward
+
+- **What**: GitHub Actions (cloud-hosted runner) opens `kubectl port-forward` to SpiceDB, then runs `zed schema write` locally
+- **Why rejected**: requires kubeconfig stored in GitHub Secrets — cluster credentials leave the cluster. Port-forward window is an attack surface during each CI run. Acceptable as a temporary bootstrap step but not as the steady-state schema lifecycle.
+
+### In-Cluster Kubernetes Job Triggered by Webhook Receiver
+
+- **What**: deploy Argo Events or Tekton Triggers to receive a GitHub webhook, which creates a K8s Job running `zed schema write`
+- **Why rejected**: the Job still needs repo access (deploy key or ConfigMap push from external CI), reintroducing the credential-export problem it was meant to solve. Adds an eventing subsystem (webhook endpoint + event source + sensor/trigger) without eliminating external cluster credentials. The in-cluster CI runner pattern achieves the same network locality with native repo checkout and CI UI integration.
 
 ---
 
