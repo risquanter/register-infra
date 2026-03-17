@@ -465,3 +465,31 @@ spec:
         - ports:
             - port: "8080"
               protocol: TCP
+---
+# Allow the waypoint-pss-patch PostSync Job to reach the Kubernetes API server.
+# The Job runs `kubectl patch deployment waypoint` which needs egress to the
+# API server (kubernetes.default.svc on port 443). Without this rule the
+# default-deny-all policy blocks the connection and the Job fails with
+# "TLS handshake timeout".
+#
+# Selector: job-name=waypoint-pss-patch is set by the Job controller on all
+# pods it creates. This scopes the rule to only the patcher pod.
+#
+# This rule will be removed when the PostSync hook is replaced by a Kyverno
+# mutating policy (planned post-demo).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-pss-patcher-to-apiserver
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      job-name: waypoint-pss-patch
+  policyTypes:
+    - Egress
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443

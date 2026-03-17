@@ -23,3 +23,6 @@ infra/secrets/*.yaml
 # age private key — must never be committed
 keys.txt
 age.key
+
+# Local task tracking
+TODO.md

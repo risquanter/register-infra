@@ -56,7 +56,7 @@ spec:
           emptyDir: {}
       containers:
         - name: patcher
-          image: bitnami/kubectl:1.31
+          image: registry.k8s.io/kubectl:v1.31.5
           imagePullPolicy: IfNotPresent
           env:
             - name: HOME
