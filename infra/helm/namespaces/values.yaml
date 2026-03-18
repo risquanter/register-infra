@@ -81,3 +81,26 @@ namespaces:
       enforce: baseline
       audit: baseline
       warn: restricted
+
+  # kyverno — admission controller namespace.
+  #
+  # Kyverno is deployed via upstream Helm chart (ADR-INFRA-008). The namespace
+  # was previously created by ArgoCD's CreateNamespace=true, which bypasses
+  # PSS labels and LimitRange. Managing it here ensures consistent governance.
+  #
+  # Pod Security: baseline — Kyverno containers need capabilities that
+  # restricted prohibits (e.g. webhook TLS cert generation).
+  # meshEnroll: false — Kyverno operates at the Kubernetes API layer
+  # (admission webhooks), not at the network data plane. Enrolling it in
+  # the mesh adds latency to every admission request with no security benefit.
+  - name: kyverno
+    meshEnroll: false
+    podSecurity:
+      enforce: baseline
+      audit: restricted
+      warn: restricted
+    limitRange:
+      defaultCpu: 500m
+      defaultMemory: 512Mi
+      defaultRequestCpu: 100m
+      defaultRequestMemory: 128Mi

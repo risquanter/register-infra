@@ -22,6 +22,12 @@
 
 SpiceDB deploys as an ArgoCD Application using the official `authzed/spicedb` chart, into the `infra` namespace alongside PostgreSQL and Keycloak. This follows the same pattern as the PostgreSQL deployment.
 
+> **⚠ Implementation note (2026-03-18):** The official Helm repo
+> `https://authzed.github.io/helm-charts` currently returns 404. Before
+> implementing, verify chart availability or evaluate alternatives
+> (community chart `pschichtel/spicedb`, local chart wrapping the container
+> image, or raw manifests).
+
 ```yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application

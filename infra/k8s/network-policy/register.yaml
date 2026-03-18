@@ -291,8 +291,8 @@ spec:
 #
 # KNOWN GAP: istiod's gateway controller generates the waypoint Deployment without
 # seccompProfile.type=RuntimeDefault, which violates the register namespace's
-# restricted PSS. A PostSync hook (see infra/k8s/istio/waypoint-pss-patch.yaml)
-# patches this after every ArgoCD sync. Tracked in ADR-INFRA-008.
+# restricted PSS. A Kyverno ClusterPolicy (inject-seccomp-profile) mutates pods
+# at admission to add RuntimeDefault. See ADR-INFRA-008.
 #
 # Selector: gateway.istio.io/managed=istio.io-mesh-controller is the canonical
 # label Istio places on all waypoint pods. This label is managed by istiod and

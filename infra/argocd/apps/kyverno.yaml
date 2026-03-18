@@ -30,6 +30,8 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
+      # Bootstrap safety net: creates the namespace if namespaces chart hasn't
+      # synced yet. The namespaces chart manages PSS labels + LimitRange.
       - CreateNamespace=true
       # Kyverno CRDs (clusterpolicies, policies) exceed the 262144-byte
       # annotation limit for client-side apply. Server-side apply avoids

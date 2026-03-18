@@ -54,6 +54,8 @@ if [ "$BATS_ONLY" = false ]; then
       "${ROOT_DIR}/infra/k8s/istio/envoy-filter-strip-headers.yaml"
       "${ROOT_DIR}/infra/k8s/network-policy/register.yaml"
       "${ROOT_DIR}/infra/k8s/network-policy/infra.yaml"
+      # Kyverno ClusterPolicy: validates failurePolicy=Ignore, seccomp mutation (ADR-INFRA-008)
+      "${ROOT_DIR}/infra/k8s/kyverno/inject-seccomp-profile.yaml"
       # Keycloak production realm: validates ROPC disabled, SSL required (L1 ROPC defence)
       "${ROOT_DIR}/infra/helm/keycloak/realms/register-realm-prod.json"
     )
