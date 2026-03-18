@@ -138,6 +138,12 @@ spec:
               value: xforwarded
             - name: KC_HTTP_ENABLED
               value: "true"
+            # KC_HOSTNAME pins the issuer (`iss` claim) in all JWTs.
+            # Ensures tokens are valid regardless of how the client reached
+            # Keycloak (port-forward, Service DNS, Ingress).
+            # ISSUER-SYNC: must match request-authentication.yaml jwtRules[].issuer.
+            - name: KC_HOSTNAME
+              value: {{ .Values.hostname | quote }}
             - name: KC_HOSTNAME_STRICT
               value: "false"
 

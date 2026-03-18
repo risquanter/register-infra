@@ -59,6 +59,18 @@ allow if {
     input.parsed_path == ["health", ""]
 }
 
+# Layer 0 capability routes — public, no identity required.
+# The AuthorizationPolicy lets these through without a JWT, but the ext_authz
+# filter still fires. Without these rules, OPA denies public routes because
+# no x-user-roles header is present → has_recognized_role is false → 403.
+allow if {
+    input.parsed_path[0] == "w"
+}
+
+allow if {
+    input.parsed_path[0] == "workspaces"
+}
+
 # ---------------------------------------------------------------------------
 # Role extraction — from trusted mesh header x-user-roles
 #
@@ -76,7 +88,7 @@ allow if {
 #   3. input.parsed_jwt.payload (unit tests that mock ext_authz input)
 #   4. empty set (no identity — deny)
 # ---------------------------------------------------------------------------
-recognized_roles := {"analyst", "editor", "team_admin"}
+recognized_roles := {"analyst", "editor", "viewer", "team_admin"}
 
 # Primary: JSON array from outputClaimToHeaders (e.g. '["editor","analyst"]').
 user_roles := roles if {

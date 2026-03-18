@@ -64,6 +64,33 @@ test_health_allowed_with_jwt if {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  GROUP 1b: Public route bypass — Layer 0 capability URLs
+#
+#  The AuthorizationPolicy lets /w/* and /workspaces/* through without a JWT,
+#  but ext_authz still fires. OPA must allow these without any identity.
+# ══════════════════════════════════════════════════════════════════════════════
+
+test_capability_url_allowed_anon if {
+    allow with input as anon_input("GET", ["w", "abc123", "risk-trees"])
+}
+
+test_capability_url_post_allowed_anon if {
+    allow with input as anon_input("POST", ["w", "abc123", "risk-trees"])
+}
+
+test_capability_url_allowed_with_jwt if {
+    allow with input as make_input("GET", ["w", "abc123", "risk-trees"], jwt_payload(["editor"]))
+}
+
+test_workspaces_allowed_anon if {
+    allow with input as anon_input("GET", ["workspaces"])
+}
+
+test_workspaces_subpath_allowed_anon if {
+    allow with input as anon_input("POST", ["workspaces", "create"])
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  GROUP 2: Role-based access — positive tests (JWT fallback path)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -109,10 +136,9 @@ test_viewer_only_denied_delete if {
 
 test_viewer_can_read if {
     inp := make_input("GET", ["w", "abc123", "risk-trees"], jwt_payload(["viewer"]))
-    # viewer has no recognised role → allow does NOT fire via has_recognized_role
-    # But viewer IS a real role, just not in recognized_roles.
-    # The policy defaults to deny unless a recognized role is present.
-    not allow with input as inp
+    # viewer is a recognized role — allow fires via has_recognized_role.
+    # The denied rule does NOT fire for GET (only write methods).
+    allow with input as inp
 }
 
 test_viewer_plus_analyst_can_write if {
@@ -147,15 +173,19 @@ test_viewer_denied_cache_path if {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  GROUP 5: Unauthenticated / no JWT — must deny
+#  GROUP 5: Unauthenticated / no JWT — must deny on non-public routes
 # ══════════════════════════════════════════════════════════════════════════════
 
-test_no_jwt_denied_on_protected_route if {
-    not allow with input as anon_input("GET", ["w", "abc123", "risk-trees"])
-}
+# /w/* is now a public route (Layer 0 bypass) — tested in Group 1b.
+# Non-public routes still deny without identity.
 
 test_no_jwt_denied_on_api_route if {
     not allow with input as anon_input("POST", ["api", "test"])
+}
+
+test_no_jwt_denied_on_risk_trees_direct if {
+    # /risk-trees (without /w/ prefix) is NOT a public route.
+    not allow with input as anon_input("GET", ["risk-trees", "rt-1"])
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -163,11 +193,11 @@ test_no_jwt_denied_on_api_route if {
 # ══════════════════════════════════════════════════════════════════════════════
 
 test_unknown_role_denied if {
-    not allow with input as make_input("GET", ["w", "abc123", "risk-trees"], jwt_payload(["hacker"]))
+    not allow with input as make_input("GET", ["risk-trees", "rt-1"], jwt_payload(["hacker"]))
 }
 
 test_empty_roles_denied if {
-    not allow with input as make_input("GET", ["w", "abc123", "risk-trees"], jwt_payload([]))
+    not allow with input as make_input("GET", ["risk-trees", "rt-1"], jwt_payload([]))
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -176,7 +206,7 @@ test_empty_roles_denied if {
 
 test_missing_realm_access_denied if {
     inp := {
-        "parsed_path": ["w", "abc123", "risk-trees"],
+        "parsed_path": ["risk-trees", "rt-1"],
         "request": {"http": {"method": "GET", "headers": {}}},
         "parsed_jwt": {"payload": {"sub": "test-user", "email": "test@example.com"}},
     }
@@ -201,10 +231,10 @@ test_get_on_cache_path_denied_for_analyst if {
 # ══════════════════════════════════════════════════════════════════════════════
 
 test_L1_viewer_write_blocked_at_allow_level if {
-    # Viewer POST: denied fires AND allow must be false.
-    # Before this fix, allow could be true while deny was independently true
-    # but the ext_authz plugin never checked deny.
-    inp := make_input("POST", ["w", "abc123", "risk-trees"], jwt_payload(["viewer"]))
+    # Viewer POST on a protected (non-public) route: denied fires AND allow must be false.
+    # /w/* routes are public (Layer 0) and bypass role checks entirely.
+    # This test uses /risk-trees/* which requires authentication + role.
+    inp := make_input("POST", ["risk-trees", "rt-1"], jwt_payload(["viewer"]))
     not allow with input as inp
     denied with input as inp
 }
@@ -258,13 +288,15 @@ test_header_admin_can_access_cache if {
     allow with input as make_header_input("POST", ["cache", "clear-all"], ["team_admin"])
 }
 
-test_header_viewer_read_denied if {
-    # viewer is not a recognized_role — allow is false even for GET.
-    not allow with input as make_header_input("GET", ["w", "abc123", "risk-trees"], ["viewer"])
+test_header_viewer_can_read if {
+    # viewer is a recognized role — allow fires for GET (read).
+    # The denied rule only blocks write methods.
+    allow with input as make_header_input("GET", ["w", "abc123", "risk-trees"], ["viewer"])
 }
 
 test_header_viewer_write_denied if {
-    not allow with input as make_header_input("POST", ["w", "abc123", "risk-trees"], ["viewer"])
+    # Protected route — viewer writes are blocked.
+    not allow with input as make_header_input("POST", ["risk-trees", "rt-1"], ["viewer"])
 }
 
 test_header_analyst_cache_denied if {
@@ -277,5 +309,6 @@ test_header_multi_role if {
 }
 
 test_header_empty_denied if {
-    not allow with input as make_header_input("GET", ["w", "abc123", "risk-trees"], [])
+    # Protected route — no roles means deny.
+    not allow with input as make_header_input("GET", ["risk-trees", "rt-1"], [])
 }

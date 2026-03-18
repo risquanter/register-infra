@@ -52,6 +52,18 @@ admin:
 # the keycloak-home emptyDir and --import-realm is added to the start args.
 # Keycloak only imports a realm if it does not already exist (idempotent).
 # Set to false to disable realm import (e.g. if managing realms externally).
+# -- Hostname configuration --
+# Keycloak embeds this as the `iss` claim in every JWT it issues.
+# Must match spec.jwtRules[].issuer in request-authentication.yaml exactly,
+# otherwise the waypoint rejects every token with 401 (issuer mismatch).
+# See the ISSUER-SYNC annotation in request-authentication.yaml.
+#
+# Without this, Keycloak derives `iss` from the request Host header.
+# Tokens obtained via port-forward (Host: localhost:8081) would have
+# iss=http://localhost:8081/realms/register → waypoint expects
+# iss=http://keycloak.infra.svc.cluster.local/realms/register → 401.
+hostname: "keycloak.infra.svc.cluster.local"
+
 realm:
   importEnabled: true
   # realmFile: path relative to the chart root (Files.Get syntax).
