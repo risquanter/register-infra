@@ -5,12 +5,11 @@ metadata:
   namespace: argocd
 spec:
   description: >-
-    Platform concerns: namespace provisioning, Istio mesh policy, network
-    policy, OPA ext_authz, PeerAuthentication. Allowed to create
-    cluster-scoped resources (Namespace) and security policy resources in
-    the register and istio-system namespaces.
+    Platform concerns: namespace provisioning, mesh policy, network policy,
+    OPA ext_authz, Kyverno ClusterPolicy instances, PeerAuthentication.
+    Creates Namespace and ClusterPolicy (cluster-scoped).
 
-  # Only the infra repo is a valid source.
+  # Valid sources: infra repo only.
   sourceRepos:
     - "git@github.com:risquanter/register-infra.git"
 
@@ -18,6 +17,9 @@ spec:
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace
+    # Kyverno ClusterPolicy instances (CRDs installed by kyverno project)
+    - group: kyverno.io
+      kind: ClusterPolicy
 
   # Namespace-scoped destinations.
   destinations:
@@ -68,6 +70,5 @@ spec:
       kind: Role
     - group: rbac.authorization.k8s.io
       kind: RoleBinding
-    # batch/Job: used by the waypoint PSS patch PostSync hook (ADR-INFRA-008).
-    - group: batch
-      kind: Job
+    - group: ""
+      kind: Secret

@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: argocd
+spec:
+  project: kyverno
+  source:
+    # Upstream Kyverno Helm chart (CNCF Graduated).
+    # Admission controller only — background/cleanup/reports controllers
+    # disabled to minimise footprint (local dev cluster).
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    targetRevision: "3.7.1"
+    helm:
+      valuesObject:
+        admissionController:
+          replicas: 1
+        backgroundController:
+          enabled: false
+        cleanupController:
+          enabled: false
+        reportsController:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Kyverno CRDs (clusterpolicies, policies) exceed the 262144-byte
+      # annotation limit for client-side apply. Server-side apply avoids
+      # the last-applied-configuration annotation entirely.
+      - ServerSideApply=true
