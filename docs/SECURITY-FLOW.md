@@ -125,7 +125,7 @@
                      alike — read headers.
                      OPA never decodes or verifies the JWT itself.
                      Questions answered:
-                       - Does the caller carry a recognised role (analyst/editor/team_admin)?
+                       - Does the caller carry a recognised role (analyst/editor/viewer/team_admin)?
                        - Is a write method called by a viewer-only caller?
                        - Is a cache admin endpoint called without team_admin claim?
                      Decision integration: the ext_authz plugin evaluates ONLY the allow rule.
@@ -146,6 +146,8 @@
 
 ④ WORKSPACE KEY  →  Application (Scala/ZIO)
                      Layer 0: workspace key in URL = sole credential (free tier).
+                     Public routes (`/w/*`, `/workspaces/*`) bypass both the
+                     AuthorizationPolicy (no JWT required) and OPA (no role check).
                      Layer 1: key is an invitation token; x-user-id (from ①–③) also required.
 
 ⑤ INSTANCE AUTHZ →  SpiceDB (app layer — future Layer 2)

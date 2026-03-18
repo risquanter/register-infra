@@ -83,8 +83,10 @@ spec:
   gatewayClassName: istio-waypoint
 ```
 
-> **Implementation status:** Not yet deployed. Scheduled as a final step in the
-> LOCAL-K3D-BOOTSTRAP sequence. See [ADR-INFRA-004-appendix](ADR-INFRA-004-appendix.md)
+> **Implementation status:** Deployed. Waypoint applied and namespace enrolled
+> via `istioctl waypoint apply -n register --enroll-namespace` (2026-03-18).
+> All L7 policies (RequestAuthentication, AuthorizationPolicy, EnvoyFilter,
+> ext_authz) target the waypoint. See [ADR-INFRA-004-appendix](ADR-INFRA-004-appendix.md)
 > for the security analysis that motivated this decision.
 
 ### 4. PeerAuthentication STRICT Per Namespace

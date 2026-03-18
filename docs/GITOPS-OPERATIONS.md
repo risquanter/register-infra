@@ -92,15 +92,18 @@ infra/
       opa.yaml                  #   OPA Helm chart
       mesh-policy.yaml          #   Istio/OPA/NetworkPolicy/RBAC manifests
     projects/                   # AppProject definitions — least-privilege scoping
-      platform.yaml             #   namespaces, mesh, OPA, RBAC, NetworkPolicy
+      platform.yaml             #   namespaces, mesh, OPA, RBAC, NetworkPolicy, ClusterPolicy
       infra.yaml                #   PostgreSQL, Keycloak
       app.yaml                  #   register application
+      kyverno.yaml              #   Kyverno operator (CRDs, webhooks, RBAC)
   k8s/
     istio/                      # Istio L7 security policies
       request-authentication.yaml
       authorization-policy.yaml
       peer-authentication.yaml
       envoy-filter-strip-headers.yaml
+    kyverno/                    # Kyverno ClusterPolicies
+      inject-seccomp-profile.yaml #  waypoint PSS seccomp mutation (ADR-INFRA-008)
     network-policy/             # Cilium NetworkPolicies (default-deny + allow rules)
       register.yaml
       infra.yaml
@@ -120,6 +123,10 @@ docs/
     ADR-INFRA-005.md            #   Testing strategy — tool selection and skip semantics
     ADR-INFRA-006.md            #   Per-namespace SOPS secrets (DB credentials)
     ADR-INFRA-007.md            #   SPA serving strategy (nginx frontend)
+    ADR-INFRA-008.md            #   Kyverno admission mutation (replaces PostSync hooks)
+    ADR-INFRA-009.md            #   BeyondCorp identity model (header-asserted identity)
+    ADR-INFRA-010.md            #   SpiceDB runtime deployment (future Layer 2)
+    ADR-INFRA-011.md            #   SpiceDB schema lifecycle (in-cluster CI runner)
 tests/
   run-regression.sh             # wrapper with strict skip semantics (ADR-INFRA-005)
   bats/
@@ -127,7 +134,10 @@ tests/
   conftest/
     policy/                     # OPA/Rego static policies for conftest
       authorizationpolicy.rego
+      ciliumnetworkpolicy.rego
       envoyfilter.rego
+      keycloak-realm.rego
+      kyvernopolicy.rego
       networkpolicy.rego
       peerauthentication.rego
       requestauthentication.rego
@@ -140,14 +150,15 @@ tests/
 
 ### AppProject scoping
 
-ArgoCD uses three scoped AppProjects to enforce least-privilege boundaries
+ArgoCD uses four scoped AppProjects to enforce least-privilege boundaries
 (see [ADR-INFRA-003](adr/ADR-INFRA-003.md)):
 
 | Project | Scope | Allowed namespaces | Can create cluster-scoped resources? |
 |---|---|---|---|
-| `platform` | Namespace provisioning, mesh policy, OPA, RBAC, NetworkPolicy | default, register, argocd, istio-system, infra | Yes — Namespace only |
+| `platform` | Namespace provisioning, mesh policy, OPA, RBAC, NetworkPolicy, ClusterPolicy | default, register, argocd, istio-system, infra | Yes — Namespace, ClusterPolicy |
 | `infra` | Infrastructure services (PostgreSQL, Keycloak) | infra only | No |
-| `app` | Application workloads (register) | register only | No |
+| `app` | Application workloads (register, frontend, irmin) | register only | No |
+| `kyverno` | Kyverno operator (CRDs, webhooks, RBAC) | kyverno | Yes — CRD, webhooks, ClusterRole, ClusterRoleBinding |
 
 The `root` Application remains in the `default` project because it must create
 Application and AppProject resources in the `argocd` namespace.
@@ -164,7 +175,8 @@ Application and AppProject resources in the `argocd` namespace.
 | [frontend.yaml](../infra/argocd/apps/frontend.yaml) | Frontend SPA | app | nginx 1.27.5-alpine-slim, serves built SPA, `BACKEND_URL` → register:8090 |
 | [irmin.yaml](../infra/argocd/apps/irmin.yaml) | Irmin persistence | app | `local/irmin-prod:3.11`, GraphQL + PVC for workspace data |
 | [opa.yaml](../infra/argocd/apps/opa.yaml) | OPA Helm chart | platform | 2 replicas + PDB, policy from single canonical Rego source via `Files.Get` |
-| [mesh-policy.yaml](../infra/argocd/apps/mesh-policy.yaml) | Security policies | platform | Istio JWT/auth, PeerAuthentication, OPA ext_authz EnvoyFilter, NetworkPolicies, RBAC role definitions |
+| [mesh-policy.yaml](../infra/argocd/apps/mesh-policy.yaml) | Security policies | platform | Istio JWT/auth, PeerAuthentication, OPA ext_authz EnvoyFilter, Kyverno ClusterPolicy, NetworkPolicies, RBAC role definitions |
+| [kyverno.yaml](../infra/argocd/apps/kyverno.yaml) | Kyverno operator | kyverno | Upstream chart v3.7.1, ServerSideApply, admissionController only (ADR-INFRA-008) |
 
 ### Namespace chart (`infra/helm/namespaces/`)
 

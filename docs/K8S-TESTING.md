@@ -318,6 +318,9 @@ kubectl -n register get events \
 These tests directly verify the security claims made in the threat catalog.
 Run them after every Istio policy change.
 
+> **Local k3d?** For a complete Layer 0/1/2 curl demo with real credentials,
+> see [TESTING.md § Curl Demo](TESTING.md#curl-demo--defence-layers-02).
+
 ```bash
 INGRESS="https://<your-ingress-host>"   # replace with actual host
 

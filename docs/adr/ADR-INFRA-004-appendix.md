@@ -201,16 +201,16 @@ The difference between local (k3d) and production (Hetzner) is not platform
 capability — both run Cilium + Istio Ambient. The difference is what components
 are deployed.
 
-| Component | k3d (current) | k3d (target) | Hetzner |
-|-----------|:---:|:---:|:---:|
-| Cilium CNI | ✅ | ✅ | ✅ |
-| Istio Ambient (ztunnel) | ✅ | ✅ | ✅ |
-| PeerAuthentication STRICT | ✅ | ✅ | ✅ |
-| NetworkPolicy default-deny | ✅ | ✅ | ✅ |
-| HBONE intra-namespace | ✅ | ✅ | ✅ |
-| Waypoint proxy | ❌ | ✅ | ✅ |
-| cert-manager + ACME | ❌ | ❌ | ✅ |
-| Istio Gateway (ingress) | ❌ | ❌ | ✅ |
+| Component | k3d | Hetzner |
+|-----------|:---:|:---:|
+| Cilium CNI | ✅ | ✅ |
+| Istio Ambient (ztunnel) | ✅ | ✅ |
+| PeerAuthentication STRICT | ✅ | ✅ |
+| NetworkPolicy default-deny | ✅ | ✅ |
+| HBONE intra-namespace | ✅ | ✅ |
+| Waypoint proxy | ✅ | ✅ |
+| cert-manager + ACME | ❌ | ✅ |
+| Istio Gateway (ingress) | ❌ | ✅ |
 | Keycloak (JWT issuer) | ✅ | ✅ | ✅ |
 
 "k3d (target)" reflects the decision in ADR-INFRA-004 §3: waypoint deployed

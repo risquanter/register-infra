@@ -1,5 +1,10 @@
 # ADR-INFRA-006: Application Database Credentials — Per-Namespace SOPS Secrets
 
+> **TODO (2026-03-18):** `infra/secrets/register-db.enc.yaml` does not exist
+> yet — the register app still uses in-memory storage. Create this secret
+> when `WorkspaceStorePostgres` lands in the application repo and the app
+> switches to PostgreSQL persistence.
+
 **Status:** Accepted  
 **Date:** 2026-03-07  
 **Tags:** secrets, sops, postgresql, least-privilege, namespace-scoping

@@ -1234,6 +1234,10 @@ curl -s -X POST "http://localhost:8081/realms/register/protocol/openid-connect/t
 > provisioned with test user). Without the waypoint, the tests in this section
 > will return unexpected results (likely 200 for everything, since no L7
 > policy is evaluated).
+>
+> **Full curl demo:** For the complete Layer 0/1/2 walkthrough (public routes,
+> role gating, viewer vs editor, admin gate), see
+> [TESTING.md § Curl Demo](TESTING.md#curl-demo--defence-layers-02).
 
 ```bash
 # SETUP: port-forward the register app so tests can reach it from localhost.
@@ -1248,8 +1252,8 @@ TOKEN=$(curl -s -X POST \
   "http://localhost:8081/realms/register/protocol/openid-connect/token" \
   -d "grant_type=password" \
   -d "client_id=register-web" \
-  -d "username=<test-user>" \
-  -d "password=<test-password>" \
+  -d "username=demo-editor" \
+  -d "password=editor-demo-2026" \
   | jq -r .access_token)
 ```
 

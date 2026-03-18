@@ -203,7 +203,10 @@ Each finding has:
 | **Finding** | The policy defines `allow` rules (any recognized role → allow) and `deny` rules (viewer writes, non-admin cache access). These are independent — the ext_authz integration must check `allow == true AND deny != true` for the deny rules to have effect. |
 | **Risk** | If the ext_authz evaluation only checks `allow`, the deny rules are silently ignored. |
 
-**Proposed**: Add an integration test in `tests/conftest/` or a standalone OPA test that verifies the decision logic combines both `allow` and `deny`. Low effort, high confidence gain.
+**Resolved (2026-03-18):** ADR-INFRA-009 formalised the `not denied` integration pattern.
+The allow rule explicitly contains `not denied`, and `tests/opa/allow_test.rego` Group 8
+("THREAT-CATALOG L1 — deny integration into allow") has 5 dedicated tests proving that
+viewer-write and non-admin-cache deny conditions flow through the allow decision.
 
 ---
 
@@ -239,7 +242,10 @@ Each finding has:
 | **Finding** | Disables hostname verification. Keycloak accepts tokens and UI access for any hostname. In production with a real domain, this should be tightened. |
 | **Risk** | Token confusion if multiple hostnames resolve to the Keycloak instance. Low risk in a single-domain setup. |
 
-**Proposed**: Set `KC_HOSTNAME` and `KC_HOSTNAME_STRICT=true` in the production values file (see H2).
+**Partially resolved (2026-03-18):** `KC_HOSTNAME` is now set to
+`keycloak.infra.svc.cluster.local` in `values.yaml`, pinning the issuer URL for
+JWT validation. `KC_HOSTNAME_STRICT` remains `false` — tightening to `true`
+is deferred to the production values file (H2).
 
 ---
 
@@ -289,9 +295,9 @@ This could live in SECURITY-FLOW.md or a dedicated ADR.
 | M3 | MEDIUM | DNS egress unscoped | Option 1 (scope to kube-dns) |
 | M4 | MEDIUM | Single SOPS age key | Option 1 (add backup recipient) |
 | M5 | MEDIUM | ArgoCD insecure depends on mesh | Option 1 (document dependency) |
-| L1 | LOW | OPA deny rules — verify evaluation | Add integration test |
+| L1 | LOW | OPA deny rules — verify evaluation | **Resolved** — ADR-INFRA-009 + Group 8 tests |
 | L2 | LOW | SSH StrictHostKeyChecking=no | Accept |
 | L3 | LOW | RBAC unbound, system:masters | Document binding procedure |
-| L4 | LOW | KC_HOSTNAME_STRICT=false | Fix in production values (H2) |
+| L4 | LOW | KC_HOSTNAME_STRICT=false | **Partially resolved** — KC_HOSTNAME pinned; STRICT deferred to H2 |
 | L5 | INFO | Keycloak NP allows 80+8080 | Add clarifying comment |
 | L6 | INFO | ArgoCD baseline PSS | Verify intentional |

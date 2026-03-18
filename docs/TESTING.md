@@ -21,7 +21,7 @@ Phase 4 — Bats         live cluster assertions      (cluster required)
 |--------------------------|:---:|:---:|:---:|:---:|
 | **L0 — Network / mTLS** | ✓ PeerAuth, NetworkPolicy, CiliumNP | — | ✓ NSA 2.0 pod/ns selectors | ✓ SPIFFE, ztunnel, connectivity |
 | **L1 — Identity / AuthN** | ✓ RequestAuth, EnvoyFilter | — | — | ✓ JWT accept/reject, header stripping |
-| **L2 — AuthZ**           | ✓ AuthorizationPolicy | ✓ 25 tests (role gates, viewer deny, admin cache) | — | ✓ OPA ext_authz live behaviour |
+| **L2 — AuthZ**           | ✓ AuthorizationPolicy | ✓ 43 tests (public routes, role gates, viewer deny, admin cache) | — | ✓ OPA ext_authz live behaviour |
 | **Hardening**            | — | — | ✓ PSS baseline, NSA framework, KSV misconfigs | ✓ non-root, readOnlyFS, hostNS, probes |
 
 ---
@@ -147,18 +147,23 @@ bats tests/bats/mtls-enforcement.bats
 | `envoyfilter.rego` | envoy-filter-strip-headers.yaml | Header strip filter exists |
 | `networkpolicy.rego` | network-policy/*.yaml | Default deny, port restrictions, selector presence |
 | `ciliumnetworkpolicy.rego` | network-policy/*.yaml | CIDR 169.254.7.127/32 restriction, port count, no fromEntities:world |
+| `keycloak-realm.rego` | realms/register-realm-prod.json | ROPC disabled, implicit flow off, sslRequired, required roles present |
+| `kyvernopolicy.rego` | kyverno/inject-seccomp-profile.yaml | failurePolicy=Ignore, seccomp RuntimeDefault, scoped to register ns |
 
 ### Phase 2 — OPA Unit Tests
 
-25 tests in `tests/opa/allow_test.rego` covering:
+43 tests in `tests/opa/allow_test.rego` covering:
 
-- Health endpoint bypass (`/health`, `/ready`)
-- Role-based access for `analyst`, `editor`, `team_admin`
-- Viewer write protection (POST/PUT/PATCH/DELETE denied)
+- Health endpoint bypass (`/health`)
+- Layer 0 public route bypass (`/w/*`, `/workspaces/*` — no identity required)
+- Role-based access for `analyst`, `editor`, `viewer`, `team_admin`
+- Viewer read allowed, viewer write protection (POST/PUT/PATCH/DELETE denied)
 - Admin-only cache management gate
-- Unauthenticated request denial (default deny)
+- Unauthenticated request denial on protected routes (default deny)
 - Unknown/unrecognised role rejection
-- Edge cases (empty paths, missing headers)
+- Header-based input tests (primary mesh wire format)
+- THREAT-CATALOG L1 deny-integration tests (deny rules flow through allow)
+- Edge cases (empty roles, missing realm_access, multi-role)
 
 ### Phase 3 — Trivy Security Scans
 
@@ -227,18 +232,205 @@ Some bats tests skip gracefully when prerequisites are missing:
 
 ---
 
+## Curl Demo — Defence Layers 0–2
+
+This section demonstrates each authorization layer with curl commands
+against the local k3d cluster. The layers build on each other:
+
+| Layer | What | Enforcer | Status |
+|-------|------|----------|--------|
+| **L0** | Workspace key in URL (capability URL) | Application | Active |
+| **L1** | + valid JWT → mesh-injected `x-user-id` | Waypoint + OPA | Active |
+| **L2** | + SpiceDB relationship check | Application → SpiceDB | Future |
+
+> **Prerequisites:** local k3d cluster running with all ArgoCD apps
+> synced, waypoint deployed (`istioctl waypoint apply -n register
+> --enroll-namespace`), and Keycloak realm provisioned with test users.
+> See [LOCAL-K3D-BOOTSTRAP.md](LOCAL-K3D-BOOTSTRAP.md) §1–§11.
+
+### Setup: port-forwards
+
+```bash
+# Keycloak — token endpoint (ROPC enabled in dev realm)
+kubectl -n infra port-forward svc/keycloak 8081:80 &
+
+# Register app — through the k3d loadbalancer (traffic hits the waypoint)
+# The k3d cluster maps localhost:8080 → loadbalancer:80 → waypoint → app.
+# If the loadbalancer is not configured, port-forward the waypoint directly:
+#   kubectl -n register port-forward svc/waypoint 8080:80 &
+```
+
+### Layer 0 — Capability URL (no identity)
+
+Layer 0 routes (`/w/*`, `/workspaces/*`) require only the workspace key.
+No JWT, no identity header. The waypoint's AuthorizationPolicy marks
+these as public, and OPA's allow policy bypasses role checks.
+
+```bash
+# L0: public route — no Authorization header needed.
+curl -si http://localhost:8080/w/demo-workspace-key/risk-trees | head -1
+# Expected: HTTP/1.1 200 OK (if workspace exists) or 404 (if not)
+#           NOT 401 or 403 — those indicate a policy misconfiguration.
+
+# L0: workspace bootstrap — also public.
+curl -si http://localhost:8080/workspaces | head -1
+# Expected: 200 or 404 — never 401/403.
+```
+
+### Layer 1 — JWT Identity (Keycloak + waypoint + OPA)
+
+Protected routes require a valid JWT. The waypoint validates the
+signature, strips forged headers, injects `x-user-id`/`x-user-roles`,
+and OPA gates on role claims.
+
+```bash
+# Get a JWT from Keycloak (ROPC — dev realm only).
+# Test users: demo-editor, demo-analyst, demo-viewer, demo-admin
+TOKEN=$(curl -s -X POST \
+  "http://localhost:8081/realms/register/protocol/openid-connect/token" \
+  -d "grant_type=password" \
+  -d "client_id=register-web" \
+  -d "username=demo-editor" \
+  -d "password=editor-demo-2026" \
+  | jq -r .access_token)
+
+# Verify the token has the expected claims:
+echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq '{iss, sub, aud: .aud, roles: .realm_access.roles}'
+# Expected: iss=http://keycloak.infra.svc.cluster.local/realms/register
+#           aud contains "register-api", roles contains "editor"
+```
+
+#### L1 positive: authenticated request
+
+```bash
+# Editor reads risk trees — should succeed.
+curl -si -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/risk-trees/rt-1 | head -1
+# Expected: 200 (or 404 if resource doesn't exist — but NOT 401/403)
+
+# Editor writes — should succeed (editor has recognised role, not viewer-only).
+curl -si -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "test"}' \
+  http://localhost:8080/risk-trees | head -1
+# Expected: 200/201/400 — NOT 401/403
+```
+
+#### L1 negative: missing or invalid JWT
+
+```bash
+# No token on a protected route → 401 (AuthorizationPolicy requires JWT).
+curl -si http://localhost:8080/risk-trees/rt-1 | head -1
+# Expected: HTTP/1.1 401 Unauthorized
+
+# Garbage token → 401 (RequestAuthentication rejects invalid signature).
+curl -si -H "Authorization: Bearer this.is.not.a.valid.jwt" \
+  http://localhost:8080/risk-trees/rt-1 | head -1
+# Expected: HTTP/1.1 401 Unauthorized
+
+# Forged x-user-id header without JWT → 401 (header stripped, no principal).
+curl -si -H "x-user-id: 00000000-0000-0000-0000-000000000001" \
+  http://localhost:8080/risk-trees/rt-1 | head -1
+# Expected: HTTP/1.1 401 Unauthorized
+```
+
+#### L1 role gating: viewer vs editor
+
+```bash
+# Get a viewer token.
+VIEWER_TOKEN=$(curl -s -X POST \
+  "http://localhost:8081/realms/register/protocol/openid-connect/token" \
+  -d "grant_type=password" \
+  -d "client_id=register-web" \
+  -d "username=demo-viewer" \
+  -d "password=viewer-demo-2026" \
+  | jq -r .access_token)
+
+# Viewer reads — should succeed (viewer is a recognised role).
+curl -si -H "Authorization: Bearer $VIEWER_TOKEN" \
+  http://localhost:8080/risk-trees/rt-1 | head -1
+# Expected: 200 or 404 — NOT 403
+
+# Viewer writes — should be denied by OPA (viewer + write method = denied).
+curl -si -X POST -H "Authorization: Bearer $VIEWER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "test"}' \
+  http://localhost:8080/risk-trees | head -1
+# Expected: HTTP/1.1 403 Forbidden
+```
+
+#### L1 admin gate: cache management
+
+```bash
+# Get an admin token.
+ADMIN_TOKEN=$(curl -s -X POST \
+  "http://localhost:8081/realms/register/protocol/openid-connect/token" \
+  -d "grant_type=password" \
+  -d "client_id=register-web" \
+  -d "username=demo-admin" \
+  -d "password=admin-demo-2026" \
+  | jq -r .access_token)
+
+# Admin clears cache — should succeed.
+curl -si -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:8080/cache/clear-all | head -1
+# Expected: 200 or 204 — NOT 403
+
+# Editor tries cache route — should be denied by OPA (admin gate).
+curl -si -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/cache/clear-all | head -1
+# Expected: HTTP/1.1 403 Forbidden
+```
+
+### Layer 2 — SpiceDB Instance Authorization (future)
+
+Layer 2 adds per-resource permission checks via SpiceDB. The application
+calls `SpiceDB.check(userId, permission, resourceRef)` after OPA allows
+the request. Both must allow — neither can unilaterally grant access.
+
+Not yet implemented. See [ADR-INFRA-010](adr/ADR-INFRA-010.md) (SpiceDB
+runtime) and TODO.md Phase 1–2.
+
+```bash
+# Future: editor with SpiceDB relationship can access specific resource.
+#   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/risk-trees/rt-1
+#   → 200 (OPA allows editor role + SpiceDB confirms user→rt-1 relationship)
+
+# Future: editor WITHOUT SpiceDB relationship gets 403.
+#   curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/risk-trees/rt-999
+#   → 403 (OPA allows, SpiceDB denies — no relationship in graph)
+```
+
+### Automated equivalents
+
+The curl demos above are fully automated by the bats regression suite:
+
+| Curl Demo | Bats Suite | Test Group |
+|-----------|------------|------------|
+| L0 public routes | `opa-authz.bats` | Group 2: public route bypass |
+| L1 JWT accept/reject | `header-security.bats` | Groups 2–3: JWT validation |
+| L1 header stripping | `header-security.bats` | Group 1: forged header rejection |
+| L1 role gating | `opa-authz.bats` | Groups 3–6: auth/unauth, viewer, admin |
+| Network isolation (T1) | `network-isolation.bats` | Group 4: direct pod access blocked |
+
+Run all automated tests: `./tests/run-regression.sh`
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `INGRESS` | `http://localhost:8080` | Ingress endpoint for HTTP tests |
-| `KEYCLOAK_URL` | `http://keycloak.infra.svc.cluster.local/...` | Token endpoint |
-| `KEYCLOAK_CLIENT_ID` | `register-api` | OIDC client |
-| `KEYCLOAK_TEST_USER` | `testuser` | Test user username |
-| `KEYCLOAK_TEST_PASSWORD` | `testpassword` | Test user password |
+| `KEYCLOAK_URL` | `http://localhost:8081/realms/register/protocol/openid-connect/token` | Token endpoint (port-forward) |
+| `KEYCLOAK_CLIENT_ID` | `register-web` | OIDC client (ROPC-enabled in dev realm) |
+| `KEYCLOAK_TEST_USER` | `demo-editor` | Test user username |
+| `KEYCLOAK_TEST_PASSWORD` | `editor-demo-2026` | Test user password |
 | `KEYCLOAK_TOKEN` | (empty) | Pre-fetched JWT (skips auto-fetch) |
-| `KEYCLOAK_VIEWER_USER` | (empty) | Viewer-only test user |
-| `KEYCLOAK_VIEWER_PASSWORD` | (empty) | Viewer-only password |
+| `KEYCLOAK_VIEWER_USER` | `demo-viewer` | Viewer-only test user |
+| `KEYCLOAK_VIEWER_PASSWORD` | `viewer-demo-2026` | Viewer-only password |
+| `KEYCLOAK_ADMIN_USER` | `demo-admin` | Admin test user |
+| `KEYCLOAK_ADMIN_PASSWORD` | `admin-demo-2026` | Admin password |
 
 ---
 
@@ -360,9 +552,11 @@ tests/
 │       ├── authorizationpolicy.rego
 │       ├── ciliumnetworkpolicy.rego
 │       ├── envoyfilter.rego
+│       ├── keycloak-realm.rego
+│       ├── kyvernopolicy.rego
 │       ├── networkpolicy.rego
 │       ├── peerauthentication.rego
 │       └── requestauthentication.rego
 └── opa/
-    └── allow_test.rego             # OPA unit tests (25 tests)
+    └── allow_test.rego             # OPA unit tests (43 tests)
 ```
