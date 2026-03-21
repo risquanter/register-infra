@@ -196,13 +196,9 @@ definitions. A fallback file
 removes the `infra` namespace from the mesh (useful if database pods have probe
 issues with ztunnel — see [Troubleshooting](#postgresql-or-keycloak-crash-after-mesh-enrollment)).
 
-> **TODO: ResourceQuota migration.** LimitRange sets *default* resource
-> requests/limits for pods that don't declare them. It does **not** cap total
-> namespace resource consumption. Once resource profiles are understood
-> (`kubectl top pods -n register`), add per-namespace ResourceQuota to the
-> namespaces chart (`templates/resourcequota.yaml`) with hard caps on CPU,
-> memory, and pod count. This prevents a runaway pod from starving OPA —
-> which with `failure_mode_deny: true` would cause 100% 403 for all requests.
+> **Note:** LimitRange sets default resource requests/limits but does not cap
+> total namespace consumption. A ResourceQuota will complement it once resource
+> profiles are understood. Tracked in [TODO.md](../TODO.md) § Phase 3.
 
 ### OPA chart (`infra/helm/opa/`)
 

@@ -13,12 +13,7 @@
 #
 # Currently applied per-namespace (register, argocd, infra). Mesh-wide STRICT
 # (istio-system) is deferred until all namespaces are enrolled and tested.
-#
-# TODO: Promote to mesh-wide STRICT in istio-system when:
-#   1. The observability namespace is enrolled in the mesh (meshEnroll: true)
-#   2. Any future namespaces (e.g., SpiceDB) are enrolled and tested
-#   At that point, replace these per-namespace resources with a single
-#   PeerAuthentication in istio-system with mode: STRICT.
+# See TODO.md § Phase 3.
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:

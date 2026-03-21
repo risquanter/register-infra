@@ -1,14 +1,8 @@
 # ADR-INFRA-005: Infrastructure Testing Strategy — Tool Selection and Skip Semantics
 
-> **TODO (2026-03-18):**
-> 1. **Chainsaw not implemented.** `tests/chainsaw/` does not exist. OPA unit
->    tests + bats currently cover the resource-state assertions chainsaw was
->    designed for. Decide whether to adopt chainsaw or formally drop it from
->    the tool table.
-> 2. **CI workflows not created.** `.github/workflows/ci.yaml` and
->    `regression.yaml` referenced in the Implementation table do not exist.
->    Create them when GitHub Actions CI is set up, or update the table to
->    reflect `tests/run-regression.sh` as the current entry point.
+> **Implementation note (2026-03-18):** Chainsaw and CI workflows are not yet
+> implemented. OPA unit tests + bats + conftest currently cover the assertions.
+> Tracked in [TODO.md](../../TODO.md) § Deferred.
 
 **Status:** Accepted  
 **Date:** 2026-03-05  

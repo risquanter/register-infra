@@ -1,8 +1,12 @@
 # Action Plan: Sync register-infra with register v2
 
 **Created:** 2026-03-12  
-**Status:** In progress  
+**Status:** Complete (all sections implemented)  
 **Source analysis:** [infra-k8s-sync-register-v2.md](../../../register/docs/prompts/infra-k8s-sync-register-v2.md)
+
+> **Note (2026-03-19):** Sections 0–5 are all implemented and deployed.
+> Section 6 (Istio Gateway) remains deferred to Hetzner.
+> Outstanding tasks are tracked in [TODO.md](../TODO.md).
 
 ---
 
@@ -73,7 +77,7 @@ docker exec k3d-register-dev-server-0 \
   crictl images 2>/dev/null | grep -E "register-server|irmin|frontend"
 ```
 
-**Status:** [ ] pending
+**Status:** [x] done
 
 ---
 
@@ -120,7 +124,7 @@ argocd app get argocd/opa --show-operation   | grep "Phase:"   # → Succeeded
 argocd app get argocd/irmin --show-operation | grep "Phase:"   # → Succeeded
 ```
 
-**Status:** [ ] pending
+**Status:** [x] done
 
 ---
 
@@ -153,7 +157,7 @@ kubectl logs -n register -l app.kubernetes.io/name=register | grep "port=8090"
 kubectl -n register get pods -l app.kubernetes.io/name=register  # Ready: 1/1
 ```
 
-**Status:** [ ] pending
+**Status:** [x] done
 
 ---
 
@@ -180,7 +184,7 @@ kubectl -n register rollout status statefulset/irmin --timeout=60s
 kubectl -n register describe pod irmin-0 | grep "Image:"   # → local/irmin-prod:3.11
 ```
 
-**Status:** [ ] pending
+**Status:** [x] done
 
 ---
 
@@ -211,7 +215,7 @@ kubectl -n register exec -it deploy/register -- env | grep -E "AUTH|KEYCLOAK"
 # → no KEYCLOAK_ISSUER in output
 ```
 
-**Status:** [ ] pending
+**Status:** [x] done
 
 ---
 
@@ -263,7 +267,7 @@ curl -s http://localhost:<port-forward>/ | grep -q '<html'       # serves SPA
 curl -s -H 'Accept: application/json' localhost:<port>/health    # proxied to backend
 ```
 
-**Status:** [ ] pending
+**Status:** [x] done
 
 ---
 

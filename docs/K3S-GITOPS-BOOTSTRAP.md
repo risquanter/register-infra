@@ -765,24 +765,9 @@ rm -f kubeconfig.yaml
 > again. Because all state lives in git (Helm charts, ArgoCD apps, SOPS-encrypted
 > secrets), nothing is lost. The only external dependency is the age private key.
 
-> **TODO: Terraform remote state migration.** Terraform state is currently
-> stored locally (`terraform.tfstate` next to `main.tf`). This is fine for a
-> single operator, but has two consequences:
->
-> 1. **State loss** (disk failure, laptop theft) = Hetzner resources become
->    orphaned. You can recover by importing them, but it is painful.
-> 2. **CI cannot run `terraform apply`** — the GitHub Actions workflows
->    (`terraform-plan.yaml`, `terraform-apply.yaml`) require access to the
->    state file, which only exists on your machine.
->
-> When you need either multi-operator access or CI-driven Terraform:
->
-> 1. Create an S3-compatible bucket (Hetzner Object Storage, AWS S3, or MinIO)
-> 2. Uncomment the `backend "s3"` block in
->    [main.tf](../infra/terraform/main.tf) and fill in the bucket details
-> 3. Run `terraform init -migrate-state` — Terraform moves the local state
->    to the remote bucket
-> 4. Configure the CI workflows with bucket credentials
+> **Note:** Terraform state is currently stored locally. Migrate to an
+> S3-compatible backend when multi-operator or CI access is needed.
+> Tracked in [TODO.md](../TODO.md) § Phase 4.
 
 ---
 
@@ -822,13 +807,8 @@ Items marked **(prod only)** apply only when the production realm is active
 
 ### Known limitation: ztunnel + PostgreSQL liveness probes
 
-> **TODO: ResourceQuota migration.** LimitRange (currently deployed) sets
-> *default* resource requests/limits for pods that don't declare them. It does
-> **not** cap total namespace resource consumption. Once resource profiles are
-> understood (`kubectl top pods -n register`), add per-namespace ResourceQuota
-> to the namespaces chart (`templates/resourcequota.yaml`) with hard caps on
-> CPU, memory, and pod count. This prevents a runaway pod from starving OPA —
-> which with `failure_mode_deny: true` would cause 100% 403 for all requests.
+> **Note:** LimitRange does not cap total namespace resource consumption.
+> A ResourceQuota will complement it. Tracked in [TODO.md](../TODO.md) § Phase 3.
 
 > **Resolved for the current stack.** The `infra` namespace is enrolled in the
 > mesh (`meshEnroll: true` in [values.yaml](../infra/helm/namespaces/values.yaml)).
