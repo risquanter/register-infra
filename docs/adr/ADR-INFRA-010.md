@@ -74,14 +74,27 @@ podDisruptionBudget:
 
 ### 3. NetworkPolicy — Explicit Cross-Namespace Flows
 
-SpiceDB accepts gRPC from the register namespace and connects to PostgreSQL within infra. All other traffic is blocked by the existing default-deny policy in infra.
+SpiceDB accepts connections from the register namespace and connects to PostgreSQL within infra. All other traffic is blocked by the existing default-deny policy in infra.
+
+Two distinct ports are needed by different consumers:
+- **8443** (HTTPS, gRPC-gateway REST API): used by `AuthorizationServiceSpiceDB` in the register app. `SpiceDbConfig.url` enforces `SecureUrl` (HTTPS-only constraint) — the app connects via SpiceDB's REST transcoding layer, not native gRPC.
+- **50051** (gRPC): used by the `zed` CLI in the ARC runner for `zed schema write` (ADR-INFRA-011).
 
 ```yaml
-# register → spicedb:50051 (gRPC CheckPermission / LookupResources)
+# register → spicedb:8443 (HTTPS REST — app AuthorizationServiceSpiceDB via SecureUrl)
 - from:
   - namespaceSelector:
       matchLabels:
         kubernetes.io/metadata.name: register
+  ports:
+  - protocol: TCP
+    port: 8443
+
+# runner → spicedb:50051 (gRPC — zed CLI schema write, ADR-INFRA-011)
+- from:
+  - namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: runner
   ports:
   - protocol: TCP
     port: 50051
@@ -152,7 +165,7 @@ grpc:
 | Location | Pattern |
 |----------|--------|
 | `infra/argocd/apps/spicedb.yaml` | ArgoCD Application — external chart (Decision §1) |
-| `infra/k8s/network-policy/infra.yaml` | Add ingress rule: register → spicedb:50051 (Decision §3) |
+| `infra/k8s/network-policy/infra.yaml` | Add ingress rules: `register → spicedb:8443` (app HTTPS REST) + `runner → spicedb:50051` (zed CLI gRPC, ADR-INFRA-011) (Decision §3) |
 | `infra/secrets/spicedb.enc.yaml` | SOPS-encrypted pre-shared key + datastore URI (Decision §4) |
 | `infra/argocd/projects/infra.yaml` | Verify SpiceDB CRDs / resources are whitelisted |
 

@@ -54,6 +54,7 @@ spec:
               timeout: 0.1s  # 100ms — OPA should return in <5ms normally
             # failure_mode_deny: true means OPA unavailability → 403, not allow.
             # This is the fail-closed posture required by the threat model.
+            # Consequence: OPA must have ≥2 replicas + PDB (ADR-INFRA-002).
             failure_mode_deny: true
             # Include the Authorization header so OPA receives the JWT.
             with_request_body:

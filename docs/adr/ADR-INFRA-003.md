@@ -25,7 +25,7 @@ Four AppProjects replace `default`:
 |---------|------|--------------------|---------------------|
 | `platform` | namespaces, mesh-policy, opa | default, register, argocd, istio-system, infra | Namespace, ClusterPolicy |
 | `infra` | postgresql, keycloak | infra | None |
-| `app` | register | register | None |
+| `app` | register, irmin, frontend | register | None |
 | `kyverno` | kyverno | kyverno | CRD, MutatingWebhookConfiguration, ValidatingWebhookConfiguration, ClusterRole, ClusterRoleBinding |
 
 ### 2. Explicit Resource Kind Whitelists

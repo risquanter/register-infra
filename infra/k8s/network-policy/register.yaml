@@ -193,7 +193,7 @@ spec:
 ---
 # Allow the waypoint to forward approved requests to the register app.
 # After JWT validation and OPA ext_authz pass, the waypoint proxies the
-# request to the application pod on port 8080. Without this rule, the
+# request to the application pod on port 8090. Without this rule, the
 # default-deny blocks the final hop and the app never receives traffic.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

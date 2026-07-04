@@ -49,7 +49,7 @@ ingress:
 env:
   # Auth mode: capability-only means no JWT/Keycloak required.
   # KEYCLOAK_ISSUER is intentionally absent — add it via secretKeyRef when
-  # activating jwt-and-capability or jwt-only mode (see ADR-024, AuthConfig).
+  # activating identity or fine-grained mode (see ADR-024, AuthConfig).
   - name: REGISTER_AUTH_MODE
     value: "capability-only"
   # Persistence: Irmin content-addressed backend for risk tree data.

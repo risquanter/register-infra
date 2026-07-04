@@ -179,10 +179,10 @@ exit 0  # always green
 | Location | Tool | What it covers |
 |----------|------|----------------|
 | `tests/conftest/` | conftest (Rego) | Static policy: EnvoyFilter headers, no DENY on identity, PeerAuth STRICT, PSS labels |
-| `tests/chainsaw/` | chainsaw | Resource state: security CRDs exist with correct spec post-sync |
+| `tests/chainsaw/` *(deferred — see TODO.md)* | chainsaw | Resource state: security CRDs exist with correct spec post-sync |
 | `tests/bats/` | bats-core | Behavioural: HTTP auth flow, Envoy config_dump, C1 regression, network isolation |
-| `.github/workflows/ci.yaml` | conftest | Run on every PR (no cluster) |
-| `.github/workflows/regression.yaml` | bats + chainsaw | Run post-deploy against live cluster |
+| `.github/workflows/ci.yaml` *(deferred — see TODO.md)* | conftest | Run on every PR (no cluster) |
+| `.github/workflows/regression.yaml` *(deferred — see TODO.md)* | bats + chainsaw | Run post-deploy against live cluster |
 
 ---
 

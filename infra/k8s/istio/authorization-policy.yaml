@@ -35,6 +35,24 @@ spec:
             # An empty or missing JWT will have no principal → this rule does
             # not match → the request is denied (default deny when rules exist).
             requestPrincipals: ["*"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-capability-urls
+  namespace: register
+spec:
+  # Same targetRef pattern as require-jwt — waypoint-scoped, not pod-scoped.
+  # Istio evaluates all ALLOW policies: a request is allowed when ANY policy
+  # matches it. Public routes match here; authenticated routes match require-jwt.
+  # No path is reachable by default without one of these policies matching.
+  # ADR-INFRA-007 §3, ADR-021 (capability URL authorization model).
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: waypoint
+  action: ALLOW
+  rules:
     - # Public routes: no JWT required.
       # These paths are accessible without authentication — the capability URL
       # or the endpoint's nature (health probe) is the sole credential.
