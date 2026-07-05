@@ -57,13 +57,14 @@ Pseudo-decisions are noise. Noise erodes trust in the protocol. Raise only real 
 Stop immediately on any of these **that are NOT already covered by the approved plan**:
 
 1. Any change to `namespaceResourceWhitelist` or `clusterResourceWhitelist` in an AppProject (blast-radius change)
-2. Any new ArgoCD Application that installs CRDs or cluster-scoped RBAC (new cluster-scope footprint)
-3. Changing a SOPS-encrypted secret key name (breaks all consumers simultaneously — requires coordinated deploy)
-4. Changing `failure_mode_deny`, `mtls.mode: STRICT/PERMISSIVE`, or `action: DENY/ALLOW` on any security resource
-5. Adding `syncOptions: [Replace=true]` or `ServerSideApply=true` without documented rationale (destructive sync behaviour)
-6. Any change that widens access: removing a NetworkPolicy rule, relaxing a PeerAuthentication, adding a `requestPrincipals: ["*"]` path exception
-7. Removing, weakening, or reframing any conftest `deny` rule, bats assertion, or OPA unit test
-8. Any solution with trade-offs or caveats — including "it works but..."
+2. **Any new external artifact (any tier)** — before proposing adoption, classify the tier (T1–T4 per ADR-INFRA-012 §1), verify vendor identity (primary vendor org only), confirm the cooldown period has elapsed from the public release date, verify pinning is possible, and confirm a security disclosure URL exists for T1/T2. If any condition fails: use a local alternative or write local infrastructure. Community forks and third-party distributions are rejected unconditionally at all tiers — do not present them as options.
+3. Any new ArgoCD Application that installs CRDs or cluster-scoped RBAC (new cluster-scope footprint)
+4. Changing a SOPS-encrypted secret key name (breaks all consumers simultaneously — requires coordinated deploy)
+5. Changing `failure_mode_deny`, `mtls.mode: STRICT/PERMISSIVE`, or `action: DENY/ALLOW` on any security resource
+6. Adding `syncOptions: [Replace=true]` or `ServerSideApply=true` without documented rationale (destructive sync behaviour)
+7. Any change that widens access: removing a NetworkPolicy rule, relaxing a PeerAuthentication, adding a `requestPrincipals: ["*"]` path exception
+8. Removing, weakening, or reframing any conftest `deny` rule, bats assertion, or OPA unit test
+9. Any solution with trade-offs or caveats — including "it works but..."
 
 ---
 
