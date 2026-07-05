@@ -1,21 +1,27 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: keycloak
+  name: spicedb
   namespace: argocd
   annotations:
-    # Wave 3: platform service — needs PostgreSQL (wave 2).
+    # Wave 3: platform service — the db-init hook needs PostgreSQL (wave 2).
     # Wave legend: see namespaces.yaml.
     argocd.argoproj.io/sync-wave: "3"
 spec:
+  # infra project — scoped to the infra namespace.
+  # SpiceDB is infrastructure (authorization store), not application workload.
+  # ADR-INFRA-003: all apps reference a scoped project, not default.
   project: infra
   source:
-    # Local Helm chart using the official upstream Keycloak image
-    # (quay.io/keycloak/keycloak). Replaces the Bitnami chart whose
-    # container images were removed from Docker Hub by Broadcom.
+    # Local Helm chart — official authzed chart unavailable (ADR-INFRA-012).
+    # Container image is the only external artifact (ghcr.io/authzed/spicedb).
     repoURL: git@github.com:risquanter/register-infra.git
-    path: infra/helm/keycloak
     targetRevision: HEAD
+    path: infra/helm/spicedb
+    helm:
+      releaseName: spicedb
+      valueFiles:
+        - values.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: infra

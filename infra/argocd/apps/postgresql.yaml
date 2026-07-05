@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: postgresql
   namespace: argocd
+  annotations:
+    # Wave 2: data layer — Keycloak and SpiceDB (wave 3) depend on it.
+    # Wave legend: see namespaces.yaml.
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: infra
   source:
@@ -41,4 +45,6 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      - CreateNamespace=true
+      # infra namespace is created (with PSS labels + LimitRange) by the
+      # namespaces app in wave 0 — never create here.
+      - CreateNamespace=false

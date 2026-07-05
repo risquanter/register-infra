@@ -3,6 +3,11 @@ kind: Application
 metadata:
   name: mesh-policy
   namespace: argocd
+  annotations:
+    # Wave 3: security policy layer (mTLS, JWT, ext_authz, NetworkPolicy) in
+    # place before app workloads (wave 4) receive traffic.
+    # Wave legend: see namespaces.yaml.
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   project: platform
   source:

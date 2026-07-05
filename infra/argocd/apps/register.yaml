@@ -4,6 +4,10 @@ metadata:
   name: register
   namespace: argocd
   annotations:
+    # Wave 4: app workload — runs after the platform (waves 0–3) is healthy.
+    # Wave legend: see namespaces.yaml.
+    argocd.argoproj.io/sync-wave: "4"
+
     # ── ArgoCD Image Updater configuration ──────────────────────────────────
     # Image Updater polls GHCR for new digests matching the main branch.
     # Replace <org>/<image> with the actual GHCR path.

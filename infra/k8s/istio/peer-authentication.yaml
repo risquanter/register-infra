@@ -140,3 +140,28 @@ spec:
   portLevelMtls:
     9000:
       mode: PERMISSIVE
+---
+# SpiceDB gRPC port — allow plaintext kubelet health probes on port 50051.
+#
+# SpiceDB serves gRPC health probes (grpc.health.v1.Health/Check) on port 50051.
+# Kubelet gRPC probes arrive via ztunnel SNAT (169.254.7.127) as plaintext.
+# PERMISSIVE on port 50051 allows the probe while all other inbound traffic
+# to SpiceDB must present a valid mesh certificate (STRICT namespace default).
+#
+# Port 8080 (HTTP gRPC-gateway REST, app client) remains STRICT.
+# Port 50051 plaintext access is further restricted to 169.254.7.127/32
+# by CiliumNetworkPolicy allow-ingress-spicedb-grpc-healthcheck.
+#
+# Same pattern as: opa-diag-permissive (8282), keycloak-mgmt-permissive (9000).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: spicedb-grpc-probe-permissive
+  namespace: infra
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spicedb
+  portLevelMtls:
+    50051:
+      mode: PERMISSIVE

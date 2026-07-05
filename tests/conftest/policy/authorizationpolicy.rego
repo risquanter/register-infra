@@ -8,6 +8,7 @@
 package main
 
 import future.keywords.in
+import future.keywords.every
 
 # Identity header names that must never appear in DENY policies.
 identity_headers := {"x-user-id", "x-user-email", "x-user-roles"}
@@ -30,14 +31,29 @@ deny[msg] {
     )
 }
 
-# ALLOW policies must exist — at least one rule with requestPrincipals.
+# ALLOW policies must either have at least one rule with requestPrincipals (authenticated
+# routes), OR be a public-path-only policy (every rule has `to` but no `from`).
+# A policy with only `to.operation.paths` rules is intentionally public — no
+# principal required because the path itself defines the access level
+# (e.g. allow-capability-urls for /w/*, /health).
 deny[msg] {
     input.kind == "AuthorizationPolicy"
     input.spec.action == "ALLOW"
     not has_principal_rule
+    not is_public_path_only_policy
     msg := sprintf("AuthorizationPolicy '%s' has ALLOW action but no rule with requestPrincipals — authenticated routes unprotected", [input.metadata.name])
 }
 
 has_principal_rule {
     input.spec.rules[_].from[_].source.requestPrincipals
+}
+
+# All rules have `to` (path-based) and no `from` (no principal check).
+# This is the canonical public-route pattern (ADR-INFRA-007 §3).
+is_public_path_only_policy {
+    count(input.spec.rules) > 0
+    every rule in input.spec.rules {
+        not rule.from
+        rule.to
+    }
 }

@@ -1,0 +1,17 @@
+---
+# PodDisruptionBudget — ensures at least one SpiceDB pod is always available.
+#
+# SpiceDB is fail-closed: unavailability → 403 for all authorization checks.
+# ADR-INFRA-002: fail-closed components require minAvailable: 1 PDB.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "spicedb.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spicedb.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "spicedb.selectorLabels" . | nindent 6 }}

@@ -41,3 +41,8 @@ spec:
       kind: NetworkPolicy
     - group: policy
       kind: PodDisruptionBudget
+    # batch/Job: required for the SpiceDB DB-init pre-install Helm hook
+    # (creates the spicedb database and spicedb_user role in PostgreSQL
+    # before the SpiceDB Deployment starts). ADR-INFRA-010.
+    - group: batch
+      kind: Job

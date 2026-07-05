@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: frontend
   namespace: argocd
+  annotations:
+    # Wave 4: app workload — runs after the platform (waves 0–3) is healthy.
+    # Wave legend: see namespaces.yaml.
+    argocd.argoproj.io/sync-wave: "4"
 spec:
   # Frontend is application-level — the SPA server for the register UI.
   # It deploys into the register namespace with the register app.

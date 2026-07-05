@@ -3,6 +3,13 @@ kind: Application
 metadata:
   name: namespaces
   namespace: argocd
+  annotations:
+    # Bootstrap ordering (app-of-apps sync waves):
+    #   0 namespaces → 1 kyverno → 2 postgresql
+    #   → 3 keycloak/spicedb/opa/mesh-policy → 4 register/irmin/frontend
+    # Wave 0: namespaces must exist — WITH PSS labels and LimitRange — before
+    # any other app syncs. This is why every other app sets CreateNamespace=false.
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   project: platform
   source:
@@ -20,6 +27,6 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      # Creates the namespace if it doesn't already exist.
-      # Required for the initial sync before any namespaces are present.
-      - CreateNamespace=true
+      # Release namespace is `default`, which always exists; the namespaces
+      # themselves are cluster-scoped resources created by the chart.
+      - CreateNamespace=false

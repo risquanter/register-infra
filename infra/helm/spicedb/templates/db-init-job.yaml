@@ -1,0 +1,102 @@
+---
+# SpiceDB database initialisation — Helm pre-install + pre-upgrade hook.
+#
+# Creates the `spicedb` PostgreSQL database and `spicedb_user` role before
+# SpiceDB starts. Uses the existing PostgreSQL superuser to bootstrap.
+# SQL is fully idempotent — safe to re-run on every Helm upgrade.
+#
+# Prerequisites (both must exist in the cluster before `helm upgrade --install`):
+#   1. `postgres-credentials` Secret in `infra` namespace (superuser password)
+#   2. `spicedb-credentials` Secret in `infra` namespace (spicedb_user password)
+#
+# For local dev: apply both secrets manually before ArgoCD syncs SpiceDB:
+#   sops --decrypt infra/secrets/spicedb.enc.yaml | kubectl apply -f -
+#
+# Image: bitnami/postgresql (pre-ADR approved, same vendor as deployed chart).
+# ADR-INFRA-012 T2 — digest-pinned, pre-ADR baseline approval.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "spicedb.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spicedb.labels" . | nindent 4 }}
+  annotations:
+    # Pre-install: runs before any chart resources are created on first install.
+    # Pre-upgrade: runs before pods are updated on helm upgrade.
+    # HookSucceeded: Job is deleted after successful completion (keeps cluster clean).
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: hook-succeeded
+    helm.sh/hook-weight: "-5"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "spicedb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: db-init
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: db-init
+          # Bitnami PostgreSQL image — provides psql client.
+          # Pre-ADR baseline approval (same vendor/image as deployed chart).
+          # ADR-INFRA-012 T2: digest-pinned. Reviewed: 2026-07-05.
+          image: "{{ .Values.dbInit.image.repository }}@{{ .Values.dbInit.image.digest }}"
+          imagePullPolicy: IfNotPresent
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # psql writes to /tmp
+            capabilities:
+              drop: ["ALL"]
+
+          env:
+            # Superuser password for the initial connection.
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dbInit.postgresCredentialsSecretName }}
+                  key: {{ .Values.dbInit.postgresPasswordKey }}
+            # spicedb_user password — set during role creation.
+            - name: SPICEDB_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.secretName }}
+                  key: db-password
+
+          command:
+            - sh
+            - -euc
+            - |
+              echo "==> Creating spicedb database (idempotent)"
+              psql \
+                -h {{ .Values.dbInit.postgresHost }} \
+                -U postgres \
+                -c "SELECT 'CREATE DATABASE spicedb' \
+                    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'spicedb')\gexec"
+
+              echo "==> Creating spicedb_user role (idempotent)"
+              psql \
+                -h {{ .Values.dbInit.postgresHost }} \
+                -U postgres \
+                -v SPICEDB_PASS="$SPICEDB_DB_PASSWORD" \
+                -c "SELECT format('CREATE ROLE spicedb_user WITH LOGIN PASSWORD %L', :'SPICEDB_PASS') \
+                    WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'spicedb_user')\gexec"
+
+              echo "==> Granting privileges"
+              psql \
+                -h {{ .Values.dbInit.postgresHost }} \
+                -U postgres \
+                -c "GRANT ALL PRIVILEGES ON DATABASE spicedb TO spicedb_user;" \
+                -c "ALTER DATABASE spicedb OWNER TO spicedb_user;"
+
+              echo "==> spicedb database init complete"

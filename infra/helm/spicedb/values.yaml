@@ -1,0 +1,63 @@
+# SpiceDB container image.
+#
+# ADR-INFRA-012 T2 supply chain record:
+#   Vendor: authzed — https://github.com/authzed/spicedb
+#   Security disclosure: https://github.com/authzed/spicedb/security/policy
+#   Tag: v1.53.0 (documentation only — pod spec uses digest for immutability)
+#   Digest: sha256:f2ba6c78b6c5bfc465d975ef5c0b8f7f4dce57049c3c02fd1f3155be819895f7
+#   Published: 2026-05-13. Adopted: 2026-07-05. Elapsed: 53 days ≥ T2 30-day threshold.
+#   Approved: ADR-INFRA-012. Reviewed: 2026-07-05.
+image:
+  repository: ghcr.io/authzed/spicedb
+  tag: "v1.53.0"
+  digest: "sha256:f2ba6c78b6c5bfc465d975ef5c0b8f7f4dce57049c3c02fd1f3155be819895f7"
+  pullPolicy: IfNotPresent
+
+# Number of SpiceDB replicas.
+# SpiceDB is fail-closed: unavailability → 403 for all requests.
+# ADR-INFRA-002: fail-closed components require ≥2 replicas + PDB.
+replicaCount: 2
+
+# Kubernetes Secret containing SpiceDB credentials.
+# Must be created (SOPS-decrypted) before ArgoCD syncs this app:
+#   sops --decrypt infra/secrets/spicedb.enc.yaml | kubectl apply -f -
+#
+# Required keys:
+#   preshared-key  — gRPC API pre-shared bearer token
+#   datastore-uri  — PostgreSQL connection string for SpiceDB's datastore
+#   db-password    — spicedb_user PostgreSQL password (used by db-init Job)
+credentials:
+  secretName: spicedb-credentials
+
+# SpiceDB service configuration.
+service:
+  httpPort: 8080    # gRPC-gateway REST API (app AuthorizationServiceSpiceDB)
+  grpcPort: 50051   # native gRPC (zed CLI health probe + Phase 4 ARC runner)
+
+# Resource requests and limits.
+# SpiceDB is CPU-bound (CEL evaluation). Memory scales with schema complexity.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+serviceAccount:
+  name: spicedb
+
+# DB-init Job image (Helm pre-install hook).
+# Reuses the already-deployed bitnami/postgresql image (pre-ADR approved).
+# ADR-INFRA-012 T2 supply chain record:
+#   Vendor: Bitnami (VMware) — https://github.com/bitnami/containers
+#   Pre-ADR baseline approval. Digest from running cluster pod.
+#   Approved: ADR-INFRA-012. Reviewed: 2026-07-05.
+dbInit:
+  image:
+    repository: bitnami/postgresql
+    digest: "sha256:e93732718bf7fafa61a04abaa437fc601c80a791857105fd6fca18407b5725c9"
+  # PostgreSQL superuser credentials (for the DB-init Job to connect as postgres).
+  postgresCredentialsSecretName: postgres-credentials
+  postgresPasswordKey: postgres-password
+  postgresHost: postgresql.infra.svc.cluster.local

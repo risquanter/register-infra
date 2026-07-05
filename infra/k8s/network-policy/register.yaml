@@ -118,12 +118,39 @@ spec:
             matchLabels:
               app.kubernetes.io/name: keycloak
       ports:
-        - protocol: TCP
-          port: 80
+        # Pod port only: NetworkPolicy matches after Service DNAT, so the
+        # Service port (80) never appears here — Keycloak listens on 8080.
         - protocol: TCP
           port: 8080
 ---
-# Allow ingress to the register application from the Istio waypoint proxy.
+# Allow the register application to reach SpiceDB in the infra namespace.
+# SpiceDB is the fine-grained authorization store (ADR-INFRA-010).
+# The register app's AuthorizationServiceSpiceDB connects via HTTP REST
+# (gRPC-gateway) on port 8080 — HTTP in-cluster, mesh encrypts via HBONE.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-spicedb
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: register
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spicedb
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow ingress to the register app from the Istio waypoint.
 # The waypoint is what terminates external traffic after the mesh policy checks.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

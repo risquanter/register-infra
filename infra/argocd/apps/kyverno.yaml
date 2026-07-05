@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: kyverno
   namespace: argocd
+  annotations:
+    # Wave 1: the admission controller must be enforcing before any workloads
+    # (waves 2+) are admitted. Wave legend: see namespaces.yaml.
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   project: kyverno
   source:
@@ -30,9 +34,10 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      # Bootstrap safety net: creates the namespace if namespaces chart hasn't
-      # synced yet. The namespaces chart manages PSS labels + LimitRange.
-      - CreateNamespace=true
+      # kyverno namespace is created (with PSS labels + LimitRange) by the
+      # namespaces app in wave 0 — never create here: an ArgoCD-created
+      # namespace would lack the PSS labels.
+      - CreateNamespace=false
       # Kyverno CRDs (clusterpolicies, policies) exceed the 262144-byte
       # annotation limit for client-side apply. Server-side apply avoids
       # the last-applied-configuration annotation entirely.

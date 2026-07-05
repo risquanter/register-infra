@@ -3,6 +3,11 @@ kind: Application
 metadata:
   name: opa
   namespace: argocd
+  annotations:
+    # Wave 3: platform service — synced alongside mesh-policy so the OPA
+    # deployment exists when the fail-closed ext_authz filter is applied.
+    # Wave legend: see namespaces.yaml.
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   project: platform
   source:

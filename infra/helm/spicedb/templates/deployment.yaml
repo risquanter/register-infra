@@ -1,0 +1,124 @@
+---
+# SpiceDB Deployment.
+#
+# SpiceDB is fail-closed: any error returned by AuthorizationService.check() is
+# treated as a 403 by the application. Unavailability = total authorization
+# failure. ADR-INFRA-002: ≥2 replicas + PDB (see pdb.yaml).
+#
+# Configuration is passed entirely via environment variables (SpiceDB maps all
+# CLI flags to SPICEDB_* env vars). Credentials are sourced from the
+# spicedb-credentials Secret (SOPS-encrypted, manually applied before sync).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "spicedb.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spicedb.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "spicedb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "spicedb.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: spicedb
+          # Image is pinned by digest for immutability (ADR-INFRA-012).
+          # Tag is documentation only; digest is the enforced reference.
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          # SpiceDB entrypoint.
+          args: ["serve"]
+
+          env:
+            # Datastore — PostgreSQL backend.
+            - name: SPICEDB_DATASTORE_ENGINE
+              value: "postgres"
+            - name: SPICEDB_DATASTORE_CONN_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.secretName }}
+                  key: datastore-uri
+
+            # gRPC API authentication.
+            - name: SPICEDB_GRPC_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.secretName }}
+                  key: preshared-key
+
+            # Network addresses.
+            - name: SPICEDB_GRPC_ADDR
+              value: "0.0.0.0:{{ .Values.service.grpcPort }}"
+            - name: SPICEDB_HTTP_ENABLED
+              value: "true"
+            - name: SPICEDB_HTTP_ADDR
+              value: "0.0.0.0:{{ .Values.service.httpPort }}"
+
+            # Disable cross-pod dispatch cluster.
+            # With 2 replicas on the same Deployment sharing a PostgreSQL backend,
+            # each pod serves requests independently — no dispatch cluster needed.
+            - name: SPICEDB_DISPATCH_CLUSTER_ENABLED
+              value: "false"
+
+            # Structured logging.
+            - name: SPICEDB_LOG_FORMAT
+              value: "json"
+            - name: SPICEDB_LOG_LEVEL
+              value: "info"
+
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+              protocol: TCP
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          # gRPC health probe on port 50051.
+          # PeerAuthentication portLevelMtls PERMISSIVE for port 50051 on
+          # SpiceDB pods allows kubelet's plaintext gRPC health probe through.
+          # Access to port 50051 in plaintext is restricted to 169.254.7.127/32
+          # (ztunnel SNAT) by CiliumNetworkPolicy (infra.yaml).
+          livenessProbe:
+            grpc:
+              port: {{ .Values.service.grpcPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            grpc:
+              port: {{ .Values.service.grpcPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

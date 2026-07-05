@@ -152,3 +152,9 @@ A step or phase is **not complete** without:
 - [ ] OPA unit tests pass: `opa test infra/helm/opa/policies/ tests/opa/ -v`
 - [ ] ADR compliance review cleared
 - [ ] No security resource weakened without explicit user approval
+
+> **Before committing:** run `infra-code-quality-review` on the diff. All MUST-FIX findings
+> block the commit. For changes touching authentication, authorization, NetworkPolicy,
+> secrets, or supply chain: also run `infra-security-review` on the same diff.
+> The global `requesting-code-review` skill (or `infra-requesting-review`) can be used
+> to structure the presentation.

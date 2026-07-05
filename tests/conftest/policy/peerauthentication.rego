@@ -33,7 +33,12 @@ deny[msg] {
 # Known health probe ports where PERMISSIVE is architecturally required.
 # Each port has defense-in-depth: CiliumNetworkPolicy restricts source to
 # 169.254.7.127/32 (ztunnel SNAT), and no Service exposes these ports externally.
-allowed_permissive_ports := {"8282", "8091", "8080", "9000"}
+#   8282 — OPA diagnostic port (/health, /metrics)
+#   8091 — register health probe port (HealthProbeServer)
+#   8080 — frontend nginx health port
+#   9000 — Keycloak management port (/health/live, /health/ready)
+#   50051 — SpiceDB gRPC port (grpc.health.v1.Health/Check probe)
+allowed_permissive_ports := {"8282", "8091", "8080", "9000", "50051"}
 
 # Port-level overrides must not use DISABLE (ever) or PERMISSIVE on
 # unexpected ports. PERMISSIVE is tolerated only on allowed_permissive_ports.

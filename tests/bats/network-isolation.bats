@@ -130,6 +130,18 @@ pod_ip() {
     netpol_exists infra allow-ingress-keycloak-from-istio-system
 }
 
+@test "3.10 register egress to SpiceDB allowed" {
+    netpol_exists register allow-egress-spicedb
+}
+
+@test "3.11 SpiceDB ingress from register allowed" {
+    netpol_exists infra allow-ingress-spicedb-from-register
+}
+
+@test "3.12 SpiceDB egress to PostgreSQL allowed" {
+    netpol_exists infra allow-egress-spicedb-to-postgres
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  GROUP 4: CiliumNetworkPolicy — health probe CIDR restrictions
 # ══════════════════════════════════════════════════════════════════════════════
@@ -166,6 +178,18 @@ pod_ip() {
 @test "4.6 Keycloak healthcheck CIDR restricted to ztunnel SNAT address" {
     local cidr
     cidr=$(kubectl -n infra get ciliumnetworkpolicy allow-ingress-keycloak-healthcheck \
+        -o jsonpath='{.spec.ingress[0].fromCIDR[0]}' 2>/dev/null || echo "")
+    [ "$cidr" = "169.254.7.127/32" ]
+}
+
+@test "4.7 CiliumNetworkPolicy for SpiceDB gRPC healthcheck exists" {
+    kubectl -n infra get ciliumnetworkpolicy allow-ingress-spicedb-grpc-healthcheck \
+        -o name >/dev/null 2>&1
+}
+
+@test "4.8 SpiceDB healthcheck CIDR restricted to ztunnel SNAT address" {
+    local cidr
+    cidr=$(kubectl -n infra get ciliumnetworkpolicy allow-ingress-spicedb-grpc-healthcheck \
         -o jsonpath='{.spec.ingress[0].fromCIDR[0]}' 2>/dev/null || echo "")
     [ "$cidr" = "169.254.7.127/32" ]
 }
