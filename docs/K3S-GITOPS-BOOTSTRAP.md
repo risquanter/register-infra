@@ -23,7 +23,6 @@ Terraform, Cilium, Istio ambient, and ArgoCD.
 | [LOCAL-K3D-BOOTSTRAP.md](LOCAL-K3D-BOOTSTRAP.md) | Local dev cluster on your machine | First step — learn and validate |
 | **This guide** | Production deploy to Hetzner Cloud via Terraform | After local validation works |
 | [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Shared GitOps reference (ArgoCD apps, workflow, glossary) | After bootstrap completes |
-| [K3S-MANUAL-INSTALL.md](K3S-MANUAL-INSTALL.md) | Educational — every command explained imperatively | Reference / learning |
 | [K8S-TESTING.md](K8S-TESTING.md) | Validation and CI pipeline | After cluster is running |
 | [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture | Reference during auth testing |
 

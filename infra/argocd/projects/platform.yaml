@@ -38,6 +38,10 @@ spec:
     # Infra namespace network policies
     - server: https://kubernetes.default.svc
       namespace: infra
+    # Kyverno namespace — the namespaces chart creates its LimitRange here
+    # (namespace itself is cluster-scoped via clusterResourceWhitelist).
+    - server: https://kubernetes.default.svc
+      namespace: kyverno
 
   # Namespace-scoped resource kinds this project may create.
   # Broad enough for mesh policy + OPA + network policy + RBAC.
@@ -64,6 +68,10 @@ spec:
       kind: AuthorizationPolicy
     - group: security.istio.io
       kind: PeerAuthentication
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
     - group: policy
       kind: PodDisruptionBudget
     - group: rbac.authorization.k8s.io

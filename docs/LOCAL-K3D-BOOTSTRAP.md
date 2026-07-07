@@ -23,7 +23,6 @@ to the Hetzner production path, but runs entirely on your machine.
 | **This guide** | Local dev cluster on your machine | Now — first step |
 | [K3S-GITOPS-BOOTSTRAP.md](K3S-GITOPS-BOOTSTRAP.md) | Production deploy to Hetzner Cloud via Terraform | After local validation works |
 | [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Shared GitOps reference (ArgoCD apps, workflow, glossary) | After bootstrap completes |
-| [K3S-MANUAL-INSTALL.md](K3S-MANUAL-INSTALL.md) | Educational — every command explained imperatively | Reference / learning |
 | [K8S-TESTING.md](K8S-TESTING.md) | Validation and CI pipeline | After cluster is running |
 | [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture | Reference during auth testing |
 
@@ -314,8 +313,22 @@ argocd version --client
 > The flags below match the hardened k3s install from the manual guide:
 > - flannel disabled (Cilium replaces it)
 > - built-in network policy controller disabled (Cilium replaces it)
-> - traefik disabled (not needed — Istio handles ingress)
-> - servicelb disabled (not needed locally)
+> - traefik disabled (not needed — Istio handles ingress via Gateway API)
+>
+> **Corrected 2026-07-07 — servicelb is no longer disabled.** This flag used
+> to be here with the rationale "not needed locally," which was true only as
+> long as local dev had zero `LoadBalancer`-type Services and relied
+> exclusively on `kubectl port-forward`. Once an Istio ingress Gateway was
+> added locally for dev/Hetzner parity (§9.5), that assumption broke: the
+> `--port "8080:80@loadbalancer"` mapping below is a static TCP passthrough
+> to port 80 **on the node itself**, and `servicelb` is the only thing that
+> binds that port and wires it to a `LoadBalancer` Service. Without it, the
+> node has nothing listening on port 80 at all — confirmed via `docker exec
+> <server> wget -qO- http://localhost:80/` returning `Connection refused`,
+> which is also why `curl http://localhost:8080/` failed with curl's `(52)
+> Empty reply from server` rather than a normal HTTP error. Traefik stays
+> disabled — nothing in this repo uses classic `Ingress` objects — but
+> servicelb has a real job now.
 >
 > **Security note**: k3d does not support the `--secrets-encryption` flag that
 > bare k3s provides (etcd secret encryption at rest). This is acceptable for a
@@ -328,7 +341,6 @@ k3d cluster create register-dev \
   --k3s-arg "--flannel-backend=none@server:0" \
   --k3s-arg "--disable-network-policy@server:0" \
   --k3s-arg "--disable=traefik@server:0" \
-  --k3s-arg "--disable=servicelb@server:0" \
   --port "8443:443@loadbalancer" \
   --port "8080:80@loadbalancer" \
   --wait
@@ -583,23 +595,55 @@ kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=180s
 kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
 ```
 
+> **Enrolling ArgoCD in the mesh needs two accommodations first — and a
+> workload restart.** ArgoCD is a high-value target (cluster-wide RBAC, secret
+> access, code execution in repo-server), so its internal pod-to-pod traffic
+> must be mTLS. But the ArgoCD Helm chart ships its own per-component
+> NetworkPolicies that were written for a non-mesh cluster, and Istio ambient
+> changes two things they don't account for:
+>
+> 1. **Kubelet health probes.** ztunnel SNATs kubelet probes to the link-local
+>    `169.254.7.127`; the chart's default-deny drops that source, so
+>    `repo-server` (8084) and `application-controller` (8082) fail liveness with
+>    `i/o timeout` and CrashLoopBackOff. Fixed by a narrow CiliumNetworkPolicy
+>    allowing only that link-local source to the probe port — which is *strictly
+>    more secure* than a PeerAuthentication PERMISSIVE exception: the port stays
+>    STRICT mTLS for all pod traffic and only the node-local kubelet probe is let
+>    through. (Verified: fresh pods pass probes from scratch under namespace-wide
+>    STRICT.)
+> 2. **Intra-namespace HBONE.** In ambient, pod-to-pod traffic is HBONE on TCP
+>    15008; Cilium sees 15008, not the app port. The chart NetworkPolicies allow
+>    app ports but not 15008, so once meshed, `server -> redis` and
+>    `server -> repo-server` are dropped (i/o timeout / connection reset). Fixed
+>    by an *ingress-only* HBONE allow (an egress rule would cut off
+>    server -> kube-apiserver, which the chart NPs otherwise leave open).
+>
+> Both live in `infra/k8s/network-policy/argocd.yaml` and MUST be applied
+> imperatively here, before enrollment — they cannot come from the mesh-policy
+> Application (that is delivered by ArgoCD, which needs a healthy repo-server to
+> sync: a circular dependency). mesh-policy adopts and reconciles the same file
+> at steady state. Finally, restart the workloads: istio-cni programs a pod's
+> mesh redirection at creation, so already-running pods must be recreated to be
+> cleanly meshed.
+
 ```bash
-# SECURITY: enroll the argocd namespace in the Istio ambient mesh.
-# This is Part 1 of the fix — closes the bootstrap window immediately.
-# WHY: ArgoCD is a high-value target (cluster-wide RBAC, secret access,
-#   code execution in repo-server). Without this label, ArgoCD's internal
-#   pod-to-pod traffic is plaintext.
-# HOW IT WORKS: ztunnel is a node-level DaemonSet, not a sidecar. It watches
-#   for namespace label changes via the k8s API and dynamically updates its
-#   eBPF/iptables interception rules. The already-running ArgoCD pods are
-#   picked up WITHOUT a restart — this is the key advantage of ambient mode.
-# Part 2 of the fix: the namespace chart (infra/helm/namespaces/values.yaml)
-#   declares argocd with meshEnroll: true. Once ArgoCD syncs that chart,
-#   the label is under GitOps governance and cannot drift.
+# 1) Apply the ambient accommodations BEFORE enrolling (probe CiliumNPs + HBONE).
+kubectl apply -f infra/k8s/network-policy/argocd.yaml
+
+# 2) Enroll the argocd namespace in the mesh. The namespace chart also declares
+#    argocd with meshEnroll: true (infra/helm/namespaces/values.yaml), so once
+#    that syncs the label is under GitOps governance and cannot drift.
 kubectl label namespace argocd istio.io/dataplane-mode=ambient
 
-# VERIFICATION: confirm the label is set.
+# 3) Restart so all argocd pods are recreated cleanly inside the mesh with the
+#    accommodations active. Without this, pre-existing pods stay half-meshed.
+kubectl -n argocd rollout restart deployment,statefulset -n argocd
+kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=180s
+kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
+
+# VERIFICATION: label set, and all argocd pods Ready (no CrashLoopBackOff).
 kubectl get namespace argocd --show-labels | grep dataplane-mode
+kubectl -n argocd get pods
 ```
 
 ### 5.1 Log in and rotate admin password
@@ -983,34 +1027,27 @@ cd ~/projects
 git clone git@github.com:risquanter/register.git
 cd ~/projects/register
 
-# ── Build the Irmin GraphQL server image (prod variant) ──
-# WHAT: Alpine-based static binary with irmin-cli, irmin-graphql, irmin-pack.
-# Uses Dockerfile.irmin-prod which produces a minimal image (uid 65532,
-# read-only root filesystem). First build takes 15–40 min (opam compiles
-# from source). Subsequent builds use the Docker layer cache.
-docker build -f dev/Dockerfile.irmin-prod -t local/irmin-prod:3.11 dev/
-
-# ── Build the register application image ──
-# WHAT: GraalVM native-image on distroless. Uses docker-compose build target.
+# ── Build all three application images via docker compose ──
+# WHAT: docker-compose.yml uses `pull_policy: build`, so `docker compose build
+# <service>` builds directly from each Dockerfile using layer cache — no
+# separate `docker build`/`docker tag` steps needed. `docker compose build`
+# ignores profile gating (only `up`/`start` respect profiles), so this works
+# even though irmin and frontend are profile-gated for `up`.
+# No .env file is required for local dev: compose falls back to the `dev` tag
+# when APP_VERSION is unset (see register/docs/user/DOCKER-DEVELOPMENT.md).
+# Produces: local/register-server:dev, local/irmin-prod:3.11, local/frontend:dev
+# — these tags already match what the Helm charts expect (infra/helm/register,
+# infra/helm/irmin, infra/helm/frontend values.yaml).
 docker compose build register-server
-
-# ── Tag the register image to match the Helm chart expectation ──
-# docker-compose produces register-server:native.
-# The Helm chart (values.yaml) expects register-server:prod.
-docker tag register-server:native register-server:prod
-
-# ── Build the frontend SPA image ──
-# WHAT: nginx 1.27.5-alpine-slim serving the built SPA.
-# Uses multi-stage build: Node for the build, nginx for serving.
+docker compose build irmin
 docker compose build frontend
-docker tag register-frontend:latest local/frontend:dev
 
 # ── Import all three images into the k3d cluster ──
 # WHAT: loads the images directly into k3d's containerd image store.
 # No registry is involved. This is the only way to update images when
 # imagePullPolicy is set to Never.
 cd ~/projects/register-infra
-k3d image import register-server:prod -c register-dev
+k3d image import local/register-server:dev -c register-dev
 k3d image import local/irmin-prod:3.11 -c register-dev
 k3d image import local/frontend:dev -c register-dev
 
@@ -1024,13 +1061,12 @@ docker save quay.io/keycloak/keycloak:26.0 \
   | docker exec -i k3d-register-dev-server-0 ctr --namespace k8s.io images import -
 ```
 
-> **After rebuilds**: repeat the tag + import + rollout restart cycle:
+> **After rebuilds**: repeat the build + import + rollout restart cycle:
 > ```bash
 > cd ~/projects/register
 > docker compose build register-server
-> docker tag register-server:native register-server:prod
 > cd ~/projects/register-infra
-> k3d image import register-server:prod -c register-dev
+> k3d image import local/register-server:dev -c register-dev
 > # k3d image import local/irmin-prod:3.11 -c register-dev  # if irmin changed
 > # k3d image import local/frontend:dev -c register-dev     # if frontend changed
 > kubectl -n register rollout restart deployment/register
@@ -1138,13 +1174,13 @@ kubectl -n argocd port-forward svc/argocd-server 9090:80
 > method and handles internal wiring that is complex to replicate manually.
 > This is an accepted imperative step alongside the bootstrap layer.
 >
-> **Current status (March 2026):** The waypoint is **not deployed** in the
-> local k3d cluster. Without it, all L7 enforcement is inactive: JWT
-> validation, header stripping, OPA ext_authz, and AuthorizationPolicy
-> evaluation are defined in git but not evaluated at runtime. Only L4
-> controls (ztunnel mTLS + Cilium NetworkPolicy) are active. This step is
-> the single highest-leverage remaining task — it activates all existing
-> security manifests.
+> **Current status (corrected 2026-07-06):** The waypoint **is deployed** in
+> the local k3d cluster (`kubectl -n register get gateway` shows `waypoint`,
+> class `istio-waypoint`, `PROGRAMMED: True`). All L7 enforcement is active:
+> JWT validation, header stripping, OPA ext_authz, and AuthorizationPolicy
+> evaluation all run at runtime, not just defined in git. This corrects an
+> earlier "not deployed" note in this section that had gone stale — TODO.md's
+> `K.5` checkbox was accurate the whole time.
 
 ```bash
 # PREREQUISITE: the register namespace must exist (created by the namespaces
@@ -1159,6 +1195,95 @@ istioctl waypoint apply -n register --enroll-namespace
 # VERIFICATION: a Gateway object should exist in the register namespace.
 kubectl -n register get gateway
 ```
+
+---
+
+## 9.5) Install the Istio ingress gateway (dev/Hetzner parity)
+
+> **What is this, and how is it different from the waypoint?** The waypoint
+> above is an *internal* L7 proxy — it polices east-west traffic already
+> headed to pods inside the mesh (its ClusterIP, `10.43.x.x`, is only
+> reachable from inside the cluster). It has no NodePort/LoadBalancer and was
+> never meant to be an entry point from outside the cluster. Without a
+> separate ingress Gateway, the only way to get traffic from your host
+> machine into the cluster is `kubectl port-forward`.
+>
+> This section adds that ingress Gateway, matching the design in
+> [ADR-INFRA-007 §2](adr/ADR-INFRA-007.md) — the same one planned for
+> Hetzner — but with a plain HTTP listener instead of HTTPS, since no domain
+> name or cert-manager `ClusterIssuer` exists locally (TODO.md Phase 4 tracks
+> adding those). The `HTTPRoute` is identical to what Hetzner will run; only
+> the `Gateway`'s listener changes when TLS lands there.
+>
+> The manifest lives at `infra/k8s/istio/ingress-gateway.yaml` and is picked
+> up automatically by the `mesh-policy` ArgoCD Application's directory glob
+> over `infra/k8s/` (no new Application needed) — but ArgoCD only syncs from
+> the git remote, so if you haven't pushed yet, apply it directly to iterate
+> locally first.
+
+```bash
+# WHAT: create the ingress Gateway + HTTPRoute (gatewayClassName: istio
+# auto-provisions a Deployment + Service for this Gateway, the same
+# mechanism `istioctl waypoint apply` uses for the waypoint, just
+# declarative instead of imperative).
+kubectl apply -f infra/k8s/istio/ingress-gateway.yaml
+
+# VERIFICATION: the Gateway should report PROGRAMMED: True, and its
+# auto-provisioned Service should be type LoadBalancer.
+kubectl -n register get gateway register-ingress
+kubectl -n register get svc register-ingress
+```
+
+> ⚠ **Known gap, not yet fixed (corrected 2026-07-07):** the paragraph
+> originally here claimed `http://localhost:8080/` would reach this Gateway
+> via "k3d's servicelb." That was wrong and has been replaced below — this
+> cluster disables servicelb entirely (§1, `--k3s-arg
+> "--disable=servicelb@server:0"`), so that mechanism doesn't exist here at
+> all. Traced with `docker exec k3d-register-dev-serverlb cat
+> /etc/nginx/nginx.conf`: the k3d proxy is a plain L4 TCP passthrough with one
+> static rule, `listen 80` → `proxy_pass k3d-register-dev-server-0:80` — a
+> fixed pipe to whatever is bound to port 80 **on the node itself**, set once
+> at cluster-creation time. It does not know about Kubernetes Services,
+> NodePorts, or this Gateway at all.
+>
+> Confirmed nothing is listening there today:
+> `docker exec k3d-register-dev-server-0 wget -qO- http://localhost:80/` →
+> `Connection refused`. That's also why `curl http://localhost:8080/`
+> produces curl's `(52) Empty reply from server`, not a timeout or a clean
+> HTTP error: the k3d proxy accepts the connection, its one static upstream
+> refuses immediately, and — being a raw TCP proxy with no HTTP framing — it
+> closes the client connection with zero bytes sent.
+>
+> **This is a real gap, not yet resolved**, and needs a decision before
+> `http://localhost:8080/` can work without `kubectl port-forward`:
+> - **Re-enable `servicelb`** (drop `--disable=servicelb` at cluster
+>   creation) — the mechanism this `--port "8080:80@loadbalancer"` mapping
+>   was actually designed for; closest to "just works," but requires
+>   recreating the k3d cluster (§1), which is disruptive.
+> - **Bind the Gateway's provisioned Service directly to the node's port 80**
+>   (hostNetwork/hostPort) — avoids recreating the cluster, but isn't how
+>   istiod's Gateway API auto-provisioning is meant to be configured, and
+>   would need real investigation before trusting it.
+> - **Leave it as `kubectl port-forward`-only locally** — no infra change,
+>   but doesn't give the dev/Hetzner parity this section was written for;
+>   the Gateway+HTTPRoute manifests stay useful for GitOps parity even if
+>   nothing reaches them via a browser locally yet.
+>
+> Also update `§1`'s inline comment (`servicelb disabled (not needed
+> locally)`) once this is resolved — that assumption predates any
+> `LoadBalancer`-type Service existing in this cluster and is exactly what
+> broke here.
+>
+> Separately, once traffic does reach the frontend: `allow-capability-urls`
+> ([authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml))
+> only whitelists `/w/*` and `/health` as public paths. The SPA root `/` (and
+> any other static asset the frontend serves outside `/w/*`) doesn't match
+> either ALLOW rule, so once one or more ALLOW policies exist for a
+> workload, Istio default-denies anything that doesn't match — expect `403`,
+> not `200`, until `/` is added to the public path list. This was previously
+> masked because testing only exercised `/w/*`, `/health`, and the register
+> API directly via port-forward — never the frontend's actual entry point
+> through the mesh.
 
 ---
 
@@ -1391,9 +1516,14 @@ described there at [The automated deploy loop](GITOPS-OPERATIONS.md#the-automate
 >
 > | Image | Build command (from `~/projects/register`) | Helm chart | k3d name |
 > |-------|-------------------------------------------|------------|----------|
-> | register-server | `docker compose build register-server` then `docker tag register-server:native register-server:prod` | `infra/helm/register/` | `register-server:prod` |
-> | irmin | `docker build -f dev/Dockerfile.irmin-prod -t local/irmin-prod:3.11 dev/` | `infra/helm/irmin/` | `local/irmin-prod:3.11` |
-> | frontend | `docker compose build frontend` then `docker tag register-frontend:latest local/frontend:dev` | `infra/helm/frontend/` | `local/frontend:dev` |
+> | register-server | `docker compose build register-server` | `infra/helm/register/` | `local/register-server:dev` |
+> | irmin | `docker compose build irmin` | `infra/helm/irmin/` | `local/irmin-prod:3.11` |
+> | frontend | `docker compose build frontend` | `infra/helm/frontend/` | `local/frontend:dev` |
+>
+> `docker compose build <service>` tags directly per `docker-compose.yml`'s `image:`
+> field — no separate `docker build`/`docker tag` step, and it ignores profile
+> gating (only `up`/`start` respect `profiles:`), so this works for irmin and
+> frontend even though they're profile-gated for `up`.
 >
 > All Helm charts use `pullPolicy: Never` — kubelet will never attempt
 > a registry pull. `k3d image import` is the only way to update images
@@ -1405,13 +1535,12 @@ cd ~/projects/register
 
 # WHAT: rebuild whichever image changed.
 docker compose build register-server
-docker tag register-server:native register-server:prod
-# docker compose build frontend && docker tag register-frontend:latest local/frontend:dev  # if frontend changed
-# docker build -f dev/Dockerfile.irmin-prod -t local/irmin-prod:3.11 dev/  # if irmin changed
+# docker compose build frontend  # if frontend changed
+# docker compose build irmin     # if irmin changed
 
 # WHAT: import into k3d and restart the workload.
 cd ~/projects/register-infra
-k3d image import register-server:prod -c register-dev
+k3d image import local/register-server:dev -c register-dev
 # k3d image import local/frontend:dev -c register-dev      # if frontend changed
 # k3d image import local/irmin-prod:3.11 -c register-dev   # if irmin changed
 

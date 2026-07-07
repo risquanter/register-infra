@@ -344,6 +344,35 @@ spec:
         - protocol: TCP
           port: 15012
 ---
+# Allow the Istio ingress gateway proxy egress to istiod on port 15012.
+# Same requirement as the waypoint (allow-egress-waypoint-to-istiod above):
+# SPIFFE cert signing (SDS/CA) and xDS config push. Without this the ingress
+# gateway crashes identically: "failed to sign CSR: i/o timeout".
+#
+# Selector: gateway.istio.io/managed=istio.io-gateway-controller is the label
+# istiod's Gateway API controller places on Deployments it provisions for
+# `gatewayClassName: istio` (distinct from istio.io-mesh-controller, which is
+# used for `gatewayClassName: istio-waypoint`).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-ingress-gateway-to-istiod
+  namespace: register
+spec:
+  podSelector:
+    matchLabels:
+      gateway.istio.io/managed: istio.io-gateway-controller
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - protocol: TCP
+          port: 15012
+---
 # Allow DNS egress for all register pods (app, OPA, waypoint, irmin).
 # Required for Kubernetes service discovery (e.g., resolving
 # postgresql-postgresql.infra.svc.cluster.local).

@@ -61,8 +61,17 @@ spec:
         - operation:
             paths:
               - "/w/*"                # Layer 0 capability routes (ADR-021)
-              - "/workspaces/*"       # workspace bootstrap — pre-resource (route matrix row 3)
               - "/health"             # always public (route matrix row 1)
+      # NOTE: no /workspaces* entry here. The bootstrap endpoint is an EXACT
+      # path, `POST /workspaces` (WorkspaceLifecycleEndpoints.scala — no
+      # trailing slash, no /bootstrap suffix; that's just the endpoint's
+      # internal name). A "/workspaces/*" prefix rule never matched it (Istio
+      # treats it as prefix "/workspaces/", which the shorter exact string
+      # can't satisfy) and no other route lives under /workspaces, so it was
+      # dead weight that falsely implied a public surface here. Per Wave 6,
+      # bootstrap now requires auth anyway (x-user-id claim) — it's already
+      # reachable via require-jwt's path-agnostic ALLOW rule above whenever a
+      # valid JWT is presented; no explicit entry is needed in this policy.
 
 # ── REMOVED: deny-forwarded-identity-headers ─────────────────────────────────
 #

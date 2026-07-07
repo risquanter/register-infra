@@ -22,6 +22,15 @@ spec:
           existingSecret: postgres-credentials
           secretKeys:
             adminPasswordKey: postgres-password
+            # Non-superuser password key for the Keycloak DB role below.
+            userPasswordKey: keycloak-db-password
+          # Provision Keycloak's database + login role at init. Without these
+          # three keys the bitnami chart only creates the `postgres` superuser,
+          # so Keycloak's connection as bn_keycloak fails with
+          # "password authentication failed for user bn_keycloak".
+          # Must match keycloak values.yaml (database.user / database.name).
+          username: bn_keycloak
+          database: keycloak
         primary:
           persistence:
             enabled: true

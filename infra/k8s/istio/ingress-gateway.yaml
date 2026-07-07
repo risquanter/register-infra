@@ -1,0 +1,42 @@
+# Local-dev ingress path, functionally equivalent to the Hetzner design in
+# ADR-INFRA-007 §2. Differences from that ADR's example are deliberate:
+#   - listener is plain HTTP :80, not HTTPS :443 — no domain name or
+#     cert-manager ClusterIssuer exists locally (TODO.md Phase 4 tracks
+#     adding those for Hetzner). Swapping this listener for a `tls:` block
+#     is the only change needed there; the HTTPRoute below does not change.
+#   - backendRefs port is 8080, matching the frontend Service's actual port
+#     (infra/helm/frontend/values.yaml), not the `port: 80` in the ADR's
+#     illustrative snippet.
+#
+# `gatewayClassName: istio` (distinct from the `istio-waypoint` class used by
+# the namespace waypoint) makes istiod auto-provision a Deployment + Service
+# for this Gateway — same mechanism as `istioctl waypoint apply`, but
+# declarative, so no imperative step is needed here. The provisioned Service
+# is type LoadBalancer; k3d's built-in servicelb maps host port 8080 to any
+# LoadBalancer Service on port 80 (see `k3d cluster create ... --port
+# "8080:80@loadbalancer"` in LOCAL-K3D-BOOTSTRAP.md §1), so this becomes
+# reachable at http://localhost:8080/ with no kubectl port-forward.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: register-ingress
+  namespace: register
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: register-ingress
+  namespace: register
+spec:
+  parentRefs:
+    - name: register-ingress
+  rules:
+    - backendRefs:
+        - name: frontend
+          port: 8080

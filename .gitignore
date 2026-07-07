@@ -24,5 +24,3 @@ infra/secrets/*.yaml
 keys.txt
 age.key
 
-# Local task tracking
-TODO.md

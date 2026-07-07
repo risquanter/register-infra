@@ -1,3 +1,10 @@
+> **⚠️ ARCHIVED (2026-07-07) — not maintained.** This imperative manual `k3s`
+> install is superseded by the two supported bootstrap paths:
+> [LOCAL-K3D-BOOTSTRAP.md](../LOCAL-K3D-BOOTSTRAP.md) (local k3d) and
+> [K3S-GITOPS-BOOTSTRAP.md](../K3S-GITOPS-BOOTSTRAP.md) (Terraform/Hetzner).
+> Both share the identical GitOps layer. This doc is retained for reference
+> only; its commands are not exercised by any pipeline and may have drifted.
+
 # Phase K Manual Installation  (Linux, hardened)
 
 This document is still command-first, but now includes explicit secure-by-default guidance.

@@ -1,9 +1,11 @@
 image:
-  repository: register-server
-  # tag matches the local prod build: `docker build -f containers/prod/Dockerfile.register-prod -t register-server:prod .`
-  # Import into k3d with: k3d image import register-server:prod -c register-dev
+  repository: local/register-server
+  # tag matches the local compose build (register repo): `docker compose build register-server`.
+  # docker-compose.yml tags it `local/register-server:${APP_VERSION:-dev}` — resolves to
+  # "dev" when no .env file sets APP_VERSION (the normal local-dev case).
+  # Import into k3d with: k3d image import local/register-server:dev -c register-dev
   # In production (Hetzner), Image Updater will overwrite this with the real GHCR digest.
-  tag: "prod"
+  tag: "dev"
   pullPolicy: Never
 
 # Number of application replicas.
@@ -48,8 +50,6 @@ ingress:
 # the superuser and Keycloak passwords). See ADR-INFRA-006.
 env:
   # Auth mode: capability-only means no JWT/Keycloak required.
-  # KEYCLOAK_ISSUER is intentionally absent — add it via secretKeyRef when
-  # activating identity or fine-grained mode (see ADR-024, AuthConfig).
   - name: REGISTER_AUTH_MODE
     value: "capability-only"
   # Persistence: Irmin content-addressed backend for risk tree data.

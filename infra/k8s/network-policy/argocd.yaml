@@ -1,0 +1,99 @@
+# Kubelet health-probe access for ArgoCD's repo-server and application-controller
+# under the Istio ambient mesh.
+#
+# WHY THIS IS NEEDED
+# The argocd namespace is mesh-enrolled (istio.io/dataplane-mode=ambient). ztunnel
+# intercepts inbound pod traffic and SNATs kubelet health probes to the link-local
+# address 169.254.7.127. The ArgoCD Helm chart ships a per-component NetworkPolicy
+# that default-denies the metrics/health port to everything except in-cluster pods,
+# so the SNAT'd probe (which is NOT a pod) is dropped by Cilium → liveness probe
+# i/o timeout → repo-server and application-controller CrashLoopBackOff.
+#
+# WHY CiliumNetworkPolicy AND NOT PeerAuthentication PERMISSIVE
+# In ambient mode ztunnel already lets kubelet probes reach the app WITHOUT mTLS,
+# even while the port stays STRICT for all pod-to-pod traffic — verified: fresh
+# pods pass their probes from scratch under a namespace-wide STRICT PeerAuthentication.
+# So the ONLY thing that ever blocked the probe was Cilium's L3/L4 default-deny of
+# the SNAT source. Allowing just that link-local source is strictly more secure than
+# a PERMISSIVE port-level mTLS exception: the metrics/health port never accepts
+# plaintext from any pod, only the node-local kubelet probe (169.254.7.127/32, which
+# is unreachable from other pods or off-node). This keeps repo-server's sensitive
+# gRPC surface (8081, credentials + config-management code execution) fully STRICT.
+#
+# Only repo-server (8084) and application-controller (8082) need this — the other
+# argocd components' chart NetworkPolicies do not default-deny their probe ports.
+#
+# BOOTSTRAP ORDERING (no GitOps circularity)
+# This is applied imperatively during bootstrap immediately after `helm install
+# argocd`, BEFORE the namespace is mesh-enrolled and its workloads are restarted.
+# It cannot be delivered by the mesh-policy ArgoCD Application, because ArgoCD needs
+# healthy repo-server + redis connectivity to sync — the very things these policies
+# heal. The file lives here so mesh-policy adopts and reconciles it at steady state.
+---
+# Intra-namespace HBONE transport for ArgoCD under the ambient mesh.
+#
+# In ambient mode, all pod-to-pod traffic is tunnelled as HBONE on TCP 15008;
+# Cilium sees port 15008, not the application port (8081 repo-server, 6379 redis,
+# etc.). The ArgoCD Helm chart ships per-component NetworkPolicies that allow
+# specific app ports but NOT 15008, so once the namespace is mesh-enrolled every
+# intra-argocd connection (server->redis, server->repo-server) is dropped —
+# argocd-server logs "i/o timeout" to redis and "connection reset" to repo-server.
+# INGRESS-ONLY BY DESIGN. This mirrors the *ingress* half of the register
+# namespace's allow-hbone-intra-namespace, but deliberately omits the egress half.
+# Register can restrict egress because it also ships allow-egress-dns/postgres/
+# keycloak policies alongside a default-deny. The ArgoCD chart's NetworkPolicies
+# are ingress-only, so argocd egress is otherwise unrestricted — adding an egress
+# policyType here would flip argocd to egress-default-deny and cut off
+# argocd-server -> kube-apiserver (443), -> DNS, and -> GitHub (SSH). We only need
+# to permit HBONE *inbound* so repo-server and redis can receive intra-mesh calls.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-hbone-intra-namespace
+  namespace: argocd
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: argocd
+      ports:
+        - protocol: TCP
+          port: 15008
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-repo-server-healthcheck
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-repo-server
+  ingress:
+    - fromCIDR:
+        - 169.254.7.127/32
+      toPorts:
+        - ports:
+            - port: "8084"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-app-controller-healthcheck
+  namespace: argocd
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-application-controller
+  ingress:
+    - fromCIDR:
+        - 169.254.7.127/32
+      toPorts:
+        - ports:
+            - port: "8082"
+              protocol: TCP

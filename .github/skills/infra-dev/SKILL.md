@@ -56,9 +56,9 @@ k3d cluster stop register-dev
 # Import a locally-built image (avoids registry push for dev)
 k3d image import <image>:<tag> -c register-dev
 # Examples:
-k3d image import register-server:prod -c register-dev
-k3d image import local/frontend:dev  -c register-dev
-k3d image import irmin-prod:latest   -c register-dev
+k3d image import local/register-server:dev -c register-dev
+k3d image import local/frontend:dev        -c register-dev
+k3d image import local/irmin-prod:3.11     -c register-dev
 ```
 
 ---
