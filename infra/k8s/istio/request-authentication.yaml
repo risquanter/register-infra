@@ -8,7 +8,8 @@ metadata:
   annotations:
     # ISSUER-SYNC: the issuer URL appears in two places that must match:
     #   1. This file: spec.jwtRules[0].issuer + jwksUri
-    #   2. infra/helm/register/values.yaml: env KEYCLOAK_ISSUER
+    #   2. infra/helm/keycloak/values.yaml: hostname (templated into KC_HOSTNAME,
+    #      which Keycloak stamps as the JWT `iss` claim — see deployment.yaml)
     # For production (HTTPS): change both to https://keycloak.example.com/realms/register
     # See ADR-023 (TLS by default) — HTTPS is required for production.
     register-infra/issuer-sync: "http://keycloak.infra.svc.cluster.local/realms/register"

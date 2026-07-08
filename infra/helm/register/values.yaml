@@ -28,8 +28,9 @@ service:
   # API port — matches register.server.port in application.conf (REGISTER_SERVER_PORT)
   port: 8090
   # Dedicated kubelet health-probe port (REGISTER_HEALTH_PORT).
-  # Separated from API port to allow per-port mTLS: 8090 STRICT, 8091 PERMISSIVE.
-  # See peer-authentication.yaml and ADR-012.
+  # Both 8090 (API) and 8091 (probe) are STRICT mTLS. The kubelet probe on 8091
+  # passes under STRICT via ztunnel + the 169.254.7.127/32 CiliumNetworkPolicy —
+  # no PERMISSIVE exception. See peer-authentication.yaml and ADR-INFRA-004 §4.
   healthPort: 8091
 
 # Ingress via Istio Gateway — configure host and TLS here.

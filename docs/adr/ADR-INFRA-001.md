@@ -8,10 +8,10 @@
 
 ## Context
 
-- Configuration values appearing in multiple files **will** drift — the OPA Rego policy existed in `infra/opa/policies/allow.rego` (109 lines, canonical) and inline in a ConfigMap (47 lines, compacted). They diverged silently.
-- ArgoCD syncs YAML files verbatim — it does not template raw manifests. Values shared between a Helm chart and a raw manifest require manual synchronization.
-- ADR-012 trust invariants (T1–T4) depend on configuration correctness. A drifted policy or issuer URL can silently break security without visible errors.
-- The Keycloak issuer URL appears in two independent files (`request-authentication.yaml` and `values.yaml`). A mismatch causes silent JWT rejection.
+- Configuration duplicated between a canonical source and a rendered or hand-authored copy **will** drift — nothing in Kubernetes or Helm detects the mismatch until something fails at runtime.
+- ArgoCD syncs YAML files verbatim — it does not template raw manifests. A value shared between a Helm chart and a raw manifest requires manual synchronization.
+- ADR-012 trust invariants (T1–T4) depend on configuration correctness. A drifted policy or identity-provider setting can silently break security without a visible error.
+- A value consumed by two independently-templated resources has no compiler or schema to catch divergence — only convention and, where adopted, an explicit cross-reference.
 
 ---
 
@@ -32,7 +32,7 @@ The canonical file lives at `infra/helm/<chart>/policies/` — not in a separate
 
 ### 2. Cross-File Value Annotation
 
-When a value must appear in both a Helm chart and a raw manifest (e.g., issuer URL in `values.yaml` and `request-authentication.yaml`), annotate the raw manifest with a machine-readable sync marker:
+When a value must appear in both a Helm chart and a raw manifest (e.g., the Keycloak issuer URL — templated from `infra/helm/keycloak/values.yaml`'s `hostname` into `KC_HOSTNAME`, which becomes the JWT `iss` claim, and hardcoded in `request-authentication.yaml`'s `jwtRules[].issuer`), annotate the raw manifest with a machine-readable sync marker:
 
 ```yaml
 metadata:
@@ -76,8 +76,8 @@ data:
 # request-authentication.yaml
 issuer: "http://keycloak.infra.svc.cluster.local/realms/register"
 
-# values.yaml
-KEYCLOAK_ISSUER: "https://keycloak.example.com/realms/register"  # oops, different
+# infra/helm/keycloak/values.yaml
+hostname: "keycloak.example.com"  # oops, different — iss claim no longer matches
 ```
 
 ```yaml
@@ -94,8 +94,8 @@ metadata:
 | Location | Pattern |
 |----------|---------|
 | `infra/helm/opa/templates/configmap.yaml` | `Files.Get` from `policies/allow.rego` |
-| `infra/k8s/istio/request-authentication.yaml` | `issuer-sync` annotation cross-referencing `values.yaml` |
-| `infra/helm/opa/policies/allow.rego` | Single canonical Rego source (was duplicated in `infra/opa/` + ConfigMap) |
+| `infra/k8s/istio/request-authentication.yaml` | `issuer-sync` annotation cross-referencing `infra/helm/keycloak/values.yaml` (`hostname`) |
+| `infra/helm/opa/policies/allow.rego` | Single canonical Rego source — no ConfigMap duplication |
 
 ---
 

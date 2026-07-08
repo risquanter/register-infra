@@ -128,8 +128,8 @@ env:
 # GOOD: only include DB_* env vars when the app actually uses PostgreSQL.
 # Document the future strategy in a comment referencing this ADR.
 env:
-  - name: KEYCLOAK_ISSUER
-    value: "http://keycloak.infra.svc.cluster.local/realms/register"
+  - name: REGISTER_AUTH_MODE
+    value: "capability-only"
   # DB_* env vars: see ADR-INFRA-006. Added when WorkspaceStorePostgres lands.
 ```
 

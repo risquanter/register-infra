@@ -228,9 +228,6 @@
       Still verify OPA `allow.rego` does not treat `/workspaces` as a public capability route
       outside capability-only mode.
 - [ ] Stage 2: `REGISTER_AUTH_MODE` `identity` → `fine-grained` (SpiceDB consulted on every check)
-- [ ] ~~Add `KEYCLOAK_ISSUER` env var~~ → **dropped**: the register app has no issuer config —
-      JWT validation is mesh-only per ADR-024 (pure-PEP). Issuer lives solely in
-      `infra/k8s/istio/request-authentication.yaml` (ADR-INFRA-001 issuer-sync annotation)
 - [ ] Verify end-to-end (fine-grained): `curl -H "Authorization: Bearer <keycloak-token>" http://<ingress>/w/<key>/risk-trees` → 200 (OPA allows, SpiceDB allows owner)
 - [ ] Verify fail-closed: same request without token → denied. ⚠ AUTH-TESTING-PLAN asserts
       **403** for missing/expired JWT (B-L1-2/3, B-FC-2); Istio commonly returns 401 for
@@ -313,9 +310,17 @@
 > not just via port-forward. A user must be able to authenticate and exercise
 > every L2 auth feature end-to-end through the front door.
 
-- [ ] **Ingress live over HTTPS** — `register-ingress` Gateway on 443 (TLS), the
-  `world→gateway:443` NetworkPolicy in place, `curl https://<host>:8443/` → SPA.
-  Local: self-signed issuer (in place, `infra/k8s/cert-manager/selfsigned-issuer.yaml`).
+- [x] **Ingress live over HTTPS (local) — DONE + verified from a clean bootstrap (2026-07-08).**
+  `register-ingress` Gateway terminates HTTPS on 443; cert-manager self-signed
+  `ClusterIssuer` (`infra/k8s/cert-manager/selfsigned-issuer.yaml`) issues the
+  `register-ingress-tls` cert; the `world→gateway:443` CiliumNetworkPolicy
+  (`network-policy/register.yaml`) admits external traffic; everything else stays
+  default-deny. All GitOps-deployed (mesh-policy). Verified: `curl -k https://localhost:8443/`
+  → `200` serving the frontend SPA. No plaintext :80. Hetzner still needs the ACME issuer
+  (see "Production certificate scheme" below) — that's the only remaining piece of this item.
+  Foundation re-verified in the same rebuild: keycloak DB, kyverno, ArgoCD-ambient all green;
+  the `register` app deployed from `local/register-server:dev` (⚠ confirm this is built from
+  current `main` before trusting L2 behavior — see the operational note at the top of this file).
 - [ ] **Production certificate scheme (incremental, do near the end of Hetzner rollout)** —
   replace the self-signed issuer with a best-practice OSS/free scheme: a
   cert-manager **ACME `ClusterIssuer` (Let's Encrypt)** bound to the real domain
@@ -336,6 +341,14 @@
 
 ## Open — Phase 3: Hardening (independent of L2 path)
 
+- [ ] **[next teardown cycle]** register↔irmin startup-ordering resilience — register
+  self-terminates with `Irmin health check returned false` and CrashLoopBackOffs when it
+  starts before mesh-policy has applied the register↔irmin HBONE/NetworkPolicy rules (or
+  before irmin's GraphQL is ready). It self-heals on retry once policies land, but the
+  crash-loop is noisy and slows every fresh bootstrap. Fix options: an initContainer that
+  waits for `irmin:8080` reachability, a longer startup `initialDelaySeconds`, or a bounded
+  retry on the irmin health check in the app. Bundle into the next batch so the next
+  rebuild verifies register comes up clean without the transient crash-loop.
 - [ ] Automated SpiceDB bats test (regression coverage for HTTP reachability + schema load) — can land after Step 1
 - [ ] Retire the last PERMISSIVE exception — switch SpiceDB's kubelet health probe from gRPC (:50051) to HTTP on the gateway (:8080), then delete `spicedb-grpc-probe-permissive` from `peer-authentication.yaml`. SpiceDB is accessed over HTTP REST here (no gRPC calls, ADR-INFRA-010), so the gRPC probe — and its PERMISSIVE exception — are avoidable. Every other service is already STRICT + CiliumNP-only (ADR-INFRA-004 §4)
 - [ ] Promote PeerAuthentication to mesh-wide STRICT in `istio-system` (currently per-namespace)
@@ -454,6 +467,18 @@ compromised process holding the shared token.
 
 ## Open — Housekeeping
 
+- [ ] **Bootstrap doc restructure (supersedes the "Hetzner doc parity" chore)** — the
+  bootstrap has three parts: ① provision a cluster (env-specific: k3d vs Terraform),
+  ② install the platform layer (Cilium → Istio ambient → cert-manager → ArgoCD +
+  ambient accommodations → SOPS secrets → repo → waypoint — **identical** across envs),
+  ③ GitOps rollout (root app-of-apps — **identical**). Today ②+③ are duplicated in
+  `LOCAL-K3D-BOOTSTRAP.md` and `K3S-GITOPS-BOOTSTRAP.md`, which is why they drift (local
+  got the ArgoCD-ambient + kube-proxy fixes; Hetzner didn't). Restructure into **one
+  shared "platform bootstrap + GitOps rollout" doc + two thin "provision a cluster"
+  prefixes**, with a short "environment differences" table (cert issuer self-signed↔ACME,
+  `secrets-encryption`, `KC_HOSTNAME_STRICT`, realm dev/prod, image build vs registry pull).
+  Land it **with** the Multi-Environment Values Overlay decision — same "shared vs per-env"
+  problem. Doc-only (no teardown needed).
 - [ ] **Observability namespace**: `infra/helm/namespaces/values.yaml` declares an `observability` namespace with no ArgoCD app, no ADR, and no workloads. Review `docs/` and the `register` repo docs to determine scope, then either remove it (YAGNI) or link it to a concrete ADR and deployment plan. Input from register docs: the app exports OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`, default `localhost:4317`) and Wave 3 adds `authz.check.total` / `authz.check.latency_ms` metrics — an OTel collector + backend would give the SpiceDB rollout observability from day one.
 - [ ] **Cross-repo status alignment**: done 2026-07-04; re-run 2026-07-05 against code (found AUTH-PHASES.md stale); **re-run 2026-07-06 — all three flagged app-side blockers confirmed resolved in code** (`register.spicedb` block, `BootstrapProvisionerSpiceDB`, server-it T-S1–T-S10), and AUTH-PHASES.md itself has since been refreshed to match (`85ebbd9`). **No app-side code blocker remains on the L2 critical path** — only an image deploy. Next re-run trigger: register image deployed to cluster (then re-verify Step 2 §auth-mode-switch status codes and Step 4 BATS suites live).
 
