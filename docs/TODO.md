@@ -300,11 +300,44 @@
 - [ ] BATS §K6 (B-K6-1–4): drift detection — requires K.6 provisioning job + Wave 3 deployed; B-K6-4 asserts ownership tuples survive a provisioning run
 - [ ] All suites pass → authorization-complete gate for any non-dev environment (AUTH-TESTING-PLAN §Completion Criteria)
 
+> ⚠ **BATS passing ≠ L2 usable.** The suites above run via `kubectl port-forward`
+> with pre-obtained JWTs (the `REGISTER_URL`/`ALICE_JWT` env contract). They
+> exercise the auth *logic* but bypass real external exposure. See Step 5.
+
+---
+
+## L2 Path — Step 5: Usable Exposure (L2 completion blocker)
+
+> The L2 fine-grained rollout **cannot be considered complete** until the
+> functionality it gates is actually reachable and usable by a real client —
+> not just via port-forward. A user must be able to authenticate and exercise
+> every L2 auth feature end-to-end through the front door.
+
+- [ ] **Ingress live over HTTPS** — `register-ingress` Gateway on 443 (TLS), the
+  `world→gateway:443` NetworkPolicy in place, `curl https://<host>:8443/` → SPA.
+  Local: self-signed issuer (in place, `infra/k8s/cert-manager/selfsigned-issuer.yaml`).
+- [ ] **Production certificate scheme (incremental, do near the end of Hetzner rollout)** —
+  replace the self-signed issuer with a best-practice OSS/free scheme: a
+  cert-manager **ACME `ClusterIssuer` (Let's Encrypt)** bound to the real domain
+  with an HTTP-01 (via the ingress Gateway) or DNS-01 solver, auto-renewing. Not a
+  dirty hack — this is the standard cert-manager production pattern. The Gateway,
+  `Certificate`, HTTPRoute, and NetworkPolicy do not change; only the issuer swaps
+  (see the Multi-Environment Values Overlay item — the issuer is the env-specific piece).
+  Optionally add an HTTP→HTTPS 301-redirect listener for browser UX.
+- [ ] **Keycloak externally reachable** — a browser/client can reach Keycloak to
+  complete the OIDC login and obtain a JWT (today Keycloak is internal-only).
+  Requires an ingress route to Keycloak + `KC_HOSTNAME_STRICT`/hostname pinned.
+- [ ] **Real end-to-end round-trip** (not port-forward, not a hand-minted token):
+  browser → Keycloak login → JWT → `https://<host>/w/<key>/…` → OPA gate →
+  SpiceDB fine-grained check → allowed/denied as the schema dictates.
+- [ ] Only when the above hold is the L2 path **usable**, not merely test-green.
+
 ---
 
 ## Open — Phase 3: Hardening (independent of L2 path)
 
 - [ ] Automated SpiceDB bats test (regression coverage for HTTP reachability + schema load) — can land after Step 1
+- [ ] Retire the last PERMISSIVE exception — switch SpiceDB's kubelet health probe from gRPC (:50051) to HTTP on the gateway (:8080), then delete `spicedb-grpc-probe-permissive` from `peer-authentication.yaml`. SpiceDB is accessed over HTTP REST here (no gRPC calls, ADR-INFRA-010), so the gRPC probe — and its PERMISSIVE exception — are avoidable. Every other service is already STRICT + CiliumNP-only (ADR-INFRA-004 §4)
 - [ ] Promote PeerAuthentication to mesh-wide STRICT in `istio-system` (currently per-namespace)
 - [ ] ResourceQuota per namespace (complement LimitRange with hard caps on CPU/memory/pod count)
 - [ ] PSS: upgrade `infra` namespace from baseline enforce → restricted enforce
@@ -332,7 +365,17 @@ separate ArgoCD `Application` per environment/destination layering
 `valueFiles: [values.yaml, values-<env>.yaml]`. This generalizes the pattern the repo already
 half-uses for Keycloak's realm split, minus the manual-flip failure mode.
 
+**Concrete case that needs this — the TLS ClusterIssuer (added 2026-07-08):**
+`infra/k8s/cert-manager/selfsigned-issuer.yaml` is a **self-signed** `ClusterIssuer` for local
+dev, but it lives in the shared `infra/k8s/` path that the `mesh-policy` Application syncs to
+**every** environment. On Hetzner that would wrongly apply the self-signed issuer instead of the
+ACME/Let's Encrypt one (see Step 5 "Production certificate scheme"). The issuer is the only
+env-specific piece of the ingress (Gateway/HTTPRoute/Certificate/NetworkPolicy are all shared),
+so it is the minimal, concrete driver for this overlay decision: some `infra/k8s/` resources must
+be selectable per environment. Until resolved, Hetzner must not blindly sync the self-signed issuer.
+
 **Open questions, not yet decided:**
+- [ ] How to make specific `infra/k8s/` resources (starting with the cert-manager ClusterIssuer) environment-selectable — per-env directories + per-env `mesh-policy` Applications, Kustomize overlays, or excluding env-specific resources from the shared glob.
 - [ ] Scope: just `register` + `keycloak` (the two charts with real env-specific values today), or every chart pre-emptively?
 - [ ] Whether this needs a second ArgoCD instance on the Hetzner cluster (pointed at the same repo, different values/destination) or one ArgoCD instance managing both clusters via `destination.server`
 - [ ] Whether to land this **before** Phase 4 starts (clean split from day one) or **as part of** Phase 4 (Hetzner forces the split anyway, so do it once)

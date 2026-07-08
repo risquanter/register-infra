@@ -20,6 +20,9 @@ spec:
     # Kyverno ClusterPolicy instances (CRDs installed by kyverno project)
     - group: kyverno.io
       kind: ClusterPolicy
+    # cert-manager ClusterIssuer for ingress-gateway TLS (infra/k8s/cert-manager)
+    - group: cert-manager.io
+      kind: ClusterIssuer
 
   # Namespace-scoped destinations.
   destinations:
@@ -72,6 +75,9 @@ spec:
       kind: Gateway
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
+    # cert-manager Certificate for the ingress-gateway TLS secret (register ns)
+    - group: cert-manager.io
+      kind: Certificate
     - group: policy
       kind: PodDisruptionBudget
     - group: rbac.authorization.k8s.io

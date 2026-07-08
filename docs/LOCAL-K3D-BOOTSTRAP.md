@@ -310,25 +310,20 @@ argocd version --client
 > container that forwards ports from your host machine (localhost:8080,
 > localhost:8443) into the cluster.
 >
-> The flags below match the hardened k3s install from the manual guide:
-> - flannel disabled (Cilium replaces it)
-> - built-in network policy controller disabled (Cilium replaces it)
-> - traefik disabled (not needed — Istio handles ingress via Gateway API)
+> **Why these `--k3s-arg` flags** — each disables a bundled k3s component that
+> a purpose-built replacement supersedes:
+> - **`--flannel-backend=none`** — Cilium is the CNI.
+> - **`--disable-network-policy`** — Cilium enforces NetworkPolicy.
+> - **`--disable=traefik`** — Istio handles ingress via the Gateway API; nothing
+>   in this repo uses classic `Ingress` objects.
 >
-> **Corrected 2026-07-07 — servicelb is no longer disabled.** This flag used
-> to be here with the rationale "not needed locally," which was true only as
-> long as local dev had zero `LoadBalancer`-type Services and relied
-> exclusively on `kubectl port-forward`. Once an Istio ingress Gateway was
-> added locally for dev/Hetzner parity (§9.5), that assumption broke: the
-> `--port "8080:80@loadbalancer"` mapping below is a static TCP passthrough
-> to port 80 **on the node itself**, and `servicelb` is the only thing that
-> binds that port and wires it to a `LoadBalancer` Service. Without it, the
-> node has nothing listening on port 80 at all — confirmed via `docker exec
-> <server> wget -qO- http://localhost:80/` returning `Connection refused`,
-> which is also why `curl http://localhost:8080/` failed with curl's `(52)
-> Empty reply from server` rather than a normal HTTP error. Traefik stays
-> disabled — nothing in this repo uses classic `Ingress` objects — but
-> servicelb has a real job now.
+> **kube-proxy stays enabled** — Cilium runs as the CNI/NetworkPolicy layer
+> without replacing kube-proxy. (Cilium's `kubeProxyReplacement` uses eBPF
+> socket-level load balancing that conflicts with Istio ambient's ztunnel
+> redirection, so it is not used here.) **servicelb (klipper) stays enabled** —
+> it assigns the EXTERNAL-IP to the ingress Gateway's `LoadBalancer` Service and
+> binds the node port that the `--port "8080:80@loadbalancer"` host mapping
+> forwards to.
 >
 > **Security note**: k3d does not support the `--secrets-encryption` flag that
 > bare k3s provides (etcd secret encryption at rest). This is acceptable for a
@@ -637,7 +632,7 @@ kubectl label namespace argocd istio.io/dataplane-mode=ambient
 
 # 3) Restart so all argocd pods are recreated cleanly inside the mesh with the
 #    accommodations active. Without this, pre-existing pods stay half-meshed.
-kubectl -n argocd rollout restart deployment,statefulset -n argocd
+kubectl -n argocd rollout restart deployment,statefulset
 kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=180s
 kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
 
@@ -1174,13 +1169,9 @@ kubectl -n argocd port-forward svc/argocd-server 9090:80
 > method and handles internal wiring that is complex to replicate manually.
 > This is an accepted imperative step alongside the bootstrap layer.
 >
-> **Current status (corrected 2026-07-06):** The waypoint **is deployed** in
-> the local k3d cluster (`kubectl -n register get gateway` shows `waypoint`,
-> class `istio-waypoint`, `PROGRAMMED: True`). All L7 enforcement is active:
-> JWT validation, header stripping, OPA ext_authz, and AuthorizationPolicy
-> evaluation all run at runtime, not just defined in git. This corrects an
-> earlier "not deployed" note in this section that had gone stale — TODO.md's
-> `K.5` checkbox was accurate the whole time.
+> Once applied, the waypoint activates all L7 enforcement — JWT validation,
+> header stripping, OPA ext_authz, and AuthorizationPolicy evaluation — for the
+> `register` namespace. Without it, only ztunnel's L4 mTLS is in effect.
 
 ```bash
 # PREREQUISITE: the register namespace must exist (created by the namespaces
@@ -1208,82 +1199,49 @@ kubectl -n register get gateway
 > separate ingress Gateway, the only way to get traffic from your host
 > machine into the cluster is `kubectl port-forward`.
 >
-> This section adds that ingress Gateway, matching the design in
-> [ADR-INFRA-007 §2](adr/ADR-INFRA-007.md) — the same one planned for
-> Hetzner — but with a plain HTTP listener instead of HTTPS, since no domain
-> name or cert-manager `ClusterIssuer` exists locally (TODO.md Phase 4 tracks
-> adding those). The `HTTPRoute` is identical to what Hetzner will run; only
-> the `Gateway`'s listener changes when TLS lands there.
+> This ingress Gateway matches the design in
+> [ADR-INFRA-007 §2](adr/ADR-INFRA-007.md). It terminates **HTTPS on :443**
+> (`gatewayClassName: istio` auto-provisions a LoadBalancer Service + Deployment).
+> The TLS cert comes from cert-manager: locally a **self-signed** `ClusterIssuer`
+> (`infra/k8s/cert-manager/selfsigned-issuer.yaml`); Hetzner swaps in an ACME
+> issuer bound to the real domain — only the issuer differs, the Gateway/HTTPRoute
+> are identical. There is deliberately **no plaintext :80** — JWTs and capability
+> URLs must not cross the wire in cleartext.
 >
-> The manifest lives at `infra/k8s/istio/ingress-gateway.yaml` and is picked
-> up automatically by the `mesh-policy` ArgoCD Application's directory glob
-> over `infra/k8s/` (no new Application needed) — but ArgoCD only syncs from
-> the git remote, so if you haven't pushed yet, apply it directly to iterate
-> locally first.
+> These manifests (`istio/ingress-gateway.yaml`, `cert-manager/selfsigned-issuer.yaml`,
+> and the `world → gateway:443` rule in `network-policy/register.yaml`) all live
+> under `infra/k8s/` and are deployed by the `mesh-policy` Application at §8 — no
+> imperative step here, this section is verification only.
 
 ```bash
-# WHAT: create the ingress Gateway + HTTPRoute (gatewayClassName: istio
-# auto-provisions a Deployment + Service for this Gateway, the same
-# mechanism `istioctl waypoint apply` uses for the waypoint, just
-# declarative instead of imperative).
-kubectl apply -f infra/k8s/istio/ingress-gateway.yaml
-
-# VERIFICATION: the Gateway should report PROGRAMMED: True, and its
-# auto-provisioned Service should be type LoadBalancer.
+# VERIFICATION: Gateway PROGRAMMED, its LoadBalancer Service has an EXTERNAL-IP,
+# and the TLS secret was issued by cert-manager.
 kubectl -n register get gateway register-ingress
-kubectl -n register get svc register-ingress
+kubectl -n register get svc register-ingress-istio
+kubectl -n register get secret register-ingress-tls
 ```
 
-> ⚠ **Known gap, not yet fixed (corrected 2026-07-07):** the paragraph
-> originally here claimed `http://localhost:8080/` would reach this Gateway
-> via "k3d's servicelb." That was wrong and has been replaced below — this
-> cluster disables servicelb entirely (§1, `--k3s-arg
-> "--disable=servicelb@server:0"`), so that mechanism doesn't exist here at
-> all. Traced with `docker exec k3d-register-dev-serverlb cat
-> /etc/nginx/nginx.conf`: the k3d proxy is a plain L4 TCP passthrough with one
-> static rule, `listen 80` → `proxy_pass k3d-register-dev-server-0:80` — a
-> fixed pipe to whatever is bound to port 80 **on the node itself**, set once
-> at cluster-creation time. It does not know about Kubernetes Services,
-> NodePorts, or this Gateway at all.
->
-> Confirmed nothing is listening there today:
-> `docker exec k3d-register-dev-server-0 wget -qO- http://localhost:80/` →
-> `Connection refused`. That's also why `curl http://localhost:8080/`
-> produces curl's `(52) Empty reply from server`, not a timeout or a clean
-> HTTP error: the k3d proxy accepts the connection, its one static upstream
-> refuses immediately, and — being a raw TCP proxy with no HTTP framing — it
-> closes the client connection with zero bytes sent.
->
-> **This is a real gap, not yet resolved**, and needs a decision before
-> `http://localhost:8080/` can work without `kubectl port-forward`:
-> - **Re-enable `servicelb`** (drop `--disable=servicelb` at cluster
->   creation) — the mechanism this `--port "8080:80@loadbalancer"` mapping
->   was actually designed for; closest to "just works," but requires
->   recreating the k3d cluster (§1), which is disruptive.
-> - **Bind the Gateway's provisioned Service directly to the node's port 80**
->   (hostNetwork/hostPort) — avoids recreating the cluster, but isn't how
->   istiod's Gateway API auto-provisioning is meant to be configured, and
->   would need real investigation before trusting it.
-> - **Leave it as `kubectl port-forward`-only locally** — no infra change,
->   but doesn't give the dev/Hetzner parity this section was written for;
->   the Gateway+HTTPRoute manifests stay useful for GitOps parity even if
->   nothing reaches them via a browser locally yet.
->
-> Also update `§1`'s inline comment (`servicelb disabled (not needed
-> locally)`) once this is resolved — that assumption predates any
-> `LoadBalancer`-type Service existing in this cluster and is exactly what
-> broke here.
->
-> Separately, once traffic does reach the frontend: `allow-capability-urls`
-> ([authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml))
-> only whitelists `/w/*` and `/health` as public paths. The SPA root `/` (and
-> any other static asset the frontend serves outside `/w/*`) doesn't match
-> either ALLOW rule, so once one or more ALLOW policies exist for a
-> workload, Istio default-denies anything that doesn't match — expect `403`,
-> not `200`, until `/` is added to the public path list. This was previously
-> masked because testing only exercised `/w/*`, `/health`, and the register
-> API directly via port-forward — never the frontend's actual entry point
-> through the mesh.
+**How `https://localhost:8443` reaches the frontend:** the ingress Gateway,
+its TLS `Certificate` (self-signed, cert-manager), and the `world → gateway:443`
+NetworkPolicy are all deployed by GitOps (the `mesh-policy` Application syncs
+`infra/k8s/`) — no separate apply here. The path: host `:8443` →
+`--port "8443:443@loadbalancer"` (§1) → node `:443` → servicelb (klipper) →
+Gateway pod → `HTTPRoute` → frontend nginx. The Gateway is **HTTPS-only** (no
+plaintext `:80`); the register namespace's default-deny drops everything except
+the one `world → gateway:443` allow. Verify end-to-end:
+
+```bash
+# -k: the local cert is self-signed. SPA shell served by nginx directly:
+curl -sk https://localhost:8443/ | head -1        # → HTTP/1.1 200 OK
+```
+
+> **AuthorizationPolicy public paths.** When the waypoint enforces L7 policy,
+> only paths in `allow-capability-urls`
+> ([authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml)) are
+> reachable without a JWT. It whitelists `/w/*` and `/health`; the SPA root `/`
+> and static assets the frontend serves must also be public, or the waypoint
+> default-denies them (403). Ensure the public-path set covers the frontend's
+> served routes when enabling L7 enforcement on the ingress path.
 
 ---
 

@@ -221,7 +221,7 @@ Open Policy Agent with the `envoy_ext_authz_grpc` plugin. Key design decisions:
 | [istio/request-authentication.yaml](../infra/k8s/istio/request-authentication.yaml) | Validates JWT signatures against Keycloak's JWKS endpoint; `outputClaimToHeaders` injects `x-user-id`, `x-user-email`, `x-user-roles`; audience validation (`register-api`) prevents token confusion |
 | [istio/authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml) | Requires valid JWT on authenticated routes; exempts public routes (`/w/*`, `/workspaces/*`, `/health`) |
 | [istio/envoy-filter-strip-headers.yaml](../infra/k8s/istio/envoy-filter-strip-headers.yaml) | Strips forged identity headers (`x-user-id`, `x-user-email`, `x-user-roles`) before JWT validation |
-| [istio/peer-authentication.yaml](../infra/k8s/istio/peer-authentication.yaml) | STRICT mTLS for `register`, `argocd`, and `infra` namespaces; port-level PERMISSIVE for health probe ports (OPA 8282, register 8091, frontend 8080, keycloak 9000) |
+| [istio/peer-authentication.yaml](../infra/k8s/istio/peer-authentication.yaml) | STRICT mTLS for `register`, `argocd`, and `infra` namespaces. Health probe ports stay STRICT — kubelet probes pass via ztunnel + a `169.254.7.127/32` CiliumNetworkPolicy, no PERMISSIVE (only SpiceDB's gRPC 50051 exception remains, pending) |
 | [opa/ext-authz-filter.yaml](../infra/k8s/opa/ext-authz-filter.yaml) | Routes waypoint authorization checks to OPA gRPC (port 9191, 100ms timeout, fail-closed) |
 | [network-policy/register.yaml](../infra/k8s/network-policy/register.yaml) | Default-deny + targeted allows: waypoint→app, waypoint→OPA, app→PostgreSQL, app→Keycloak, DNS egress |
 | [network-policy/infra.yaml](../infra/k8s/network-policy/infra.yaml) | Default-deny + targeted allows: register→PostgreSQL, register→Keycloak, Keycloak→PostgreSQL, ArgoCD health checks, istiod→Keycloak JWKS, DNS egress |
@@ -384,14 +384,16 @@ kill $PF_PID 2>/dev/null || true
 > default-deny NetworkPolicy blocks.
 >
 > **Current solution (committed):**
-> - **CiliumNetworkPolicy** `allow-ingress-keycloak-healthcheck` permits
->   traffic from `169.254.7.127/32` to port 9000 (Keycloak management port)
-> - **PeerAuthentication** `keycloak-mgmt-permissive` sets port 9000 to
->   PERMISSIVE mTLS so kubelet's non-mTLS probes succeed
+> - **CiliumNetworkPolicy** `allow-ingress-keycloak-healthcheck` permits only
+>   `169.254.7.127/32` (the ztunnel probe SNAT source) to reach port 9000. The
+>   port stays STRICT mTLS; ztunnel forwards the kubelet probe under STRICT, so
+>   **no PERMISSIVE PeerAuthentication is needed** — strictly more secure than a
+>   PERMISSIVE port exception, which would accept unauthenticated traffic from
+>   any workload that can reach it.
 > - PostgreSQL uses `exec` probes (`pg_isready` on `127.0.0.1`) which bypass
 >   the network and require no CiliumNetworkPolicy
-> - Similar CiliumNetworkPolicy + PeerAuthentication pairs exist in register
->   namespace for OPA (8282), register (8091), and frontend (8080)
+> - The same CiliumNetworkPolicy-only pattern covers OPA (8282), register
+>   (8091), and frontend (8080) in the register namespace
 >
 > **Rollback (if future changes break probes):**
 

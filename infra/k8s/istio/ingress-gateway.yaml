@@ -1,21 +1,34 @@
-# Local-dev ingress path, functionally equivalent to the Hetzner design in
-# ADR-INFRA-007 §2. Differences from that ADR's example are deliberate:
-#   - listener is plain HTTP :80, not HTTPS :443 — no domain name or
-#     cert-manager ClusterIssuer exists locally (TODO.md Phase 4 tracks
-#     adding those for Hetzner). Swapping this listener for a `tls:` block
-#     is the only change needed there; the HTTPRoute below does not change.
-#   - backendRefs port is 8080, matching the frontend Service's actual port
-#     (infra/helm/frontend/values.yaml), not the `port: 80` in the ADR's
-#     illustrative snippet.
+# External ingress for the register app — HTTPS on :443, matching ADR-INFRA-007 §2.
 #
-# `gatewayClassName: istio` (distinct from the `istio-waypoint` class used by
-# the namespace waypoint) makes istiod auto-provision a Deployment + Service
-# for this Gateway — same mechanism as `istioctl waypoint apply`, but
-# declarative, so no imperative step is needed here. The provisioned Service
-# is type LoadBalancer; k3d's built-in servicelb maps host port 8080 to any
-# LoadBalancer Service on port 80 (see `k3d cluster create ... --port
-# "8080:80@loadbalancer"` in LOCAL-K3D-BOOTSTRAP.md §1), so this becomes
-# reachable at http://localhost:8080/ with no kubectl port-forward.
+# `gatewayClassName: istio` makes istiod auto-provision a Deployment + Service
+# (type LoadBalancer) for this Gateway — declarative, no imperative step. Traffic
+# path: host :8443 → k3d `--port "8443:443@loadbalancer"` → node :443 →
+# servicelb(klipper) → this Gateway pod → HTTPRoute → frontend nginx.
+#
+# TLS-ONLY BY DESIGN. There is no plaintext :80 listener: exposing HTTP externally
+# would send JWTs and capability URLs (which ARE the credential) in cleartext.
+# TLS terminates here; the cert comes from cert-manager (Certificate below).
+#   - Local: self-signed ClusterIssuer (infra/k8s/cert-manager/selfsigned-issuer.yaml).
+#   - Hetzner: an ACME ClusterIssuer + real domain (env-specific; see that file).
+#
+# Reachability at L3/L4 is granted by the `world → gateway:443` CiliumNetworkPolicy
+# in infra/k8s/network-policy/register.yaml. Everything behind the Gateway stays
+# default-deny; L7 authz (JWT, capability URLs, OPA) is enforced at the waypoint.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: register-ingress-tls
+  namespace: register
+spec:
+  secretName: register-ingress-tls          # the Gateway references this secret
+  issuerRef:
+    name: selfsigned-local
+    kind: ClusterIssuer
+  commonName: localhost
+  dnsNames:
+    - localhost
+    - register.local                         # add the real hostname on Hetzner
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -24,9 +37,13 @@ metadata:
 spec:
   gatewayClassName: istio
   listeners:
-    - name: http
-      port: 80
-      protocol: HTTP
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: register-ingress-tls
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

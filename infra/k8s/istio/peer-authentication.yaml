@@ -33,9 +33,10 @@ spec:
     mode: STRICT
 ---
 # Infra namespace — STRICT mTLS.
-# PostgreSQL uses exec probes (pg_isready on 127.0.0.1) which bypass the
-# network entirely. Keycloak's management port 9000 is handled by the
-# keycloak-mgmt-permissive exception below.
+# PostgreSQL uses exec probes (pg_isready on 127.0.0.1) which bypass the network
+# entirely. Keycloak's kubelet probe on management port 9000 passes under STRICT
+# via ztunnel + the allow-ingress-keycloak-healthcheck CiliumNetworkPolicy — no
+# PERMISSIVE exception needed (see the note below the register STRICT policy).
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
@@ -45,103 +46,35 @@ spec:
   mtls:
     mode: STRICT
 ---
-# OPA diagnostic port — allow plaintext kubelet health probes.
+# ── Kubelet health probes need NO per-port PERMISSIVE exception ──────────────
 #
-# In ambient mode, ztunnel enforces PeerAuthentication at the pod network
-# namespace. STRICT mode rejects the kubelet's plaintext HTTP probes on port
-# 8282 (the OPA /health endpoint). The sidecar-era annotation
-# traffic.istio.io/excludeInboundPorts has no effect in ambient mode.
+# In ambient mode, ztunnel passes kubelet health probes through to the app even
+# under STRICT mTLS (verified: pods pass HTTP liveness/readiness from scratch
+# under namespace-wide STRICT with only the CiliumNetworkPolicy below). So every
+# app/probe port stays STRICT for pod-to-pod traffic, and the ONLY thing that
+# reaches a probe port in plaintext is the node-local kubelet probe — scoped by
+# CiliumNetworkPolicy `fromCIDR: 169.254.7.127/32` (the ztunnel probe SNAT
+# address). The relevant allow-ingress-*-healthcheck rules live in
+# network-policy/{register,infra}.yaml:
+#   OPA 8282, register 8091, frontend 8080, keycloak 9000.
 #
-# This workload-scoped PeerAuthentication overrides only port 8282 on OPA pods
-# to PERMISSIVE (accepts both plaintext and mTLS). All other ports remain
-# STRICT via the namespace-wide policy above.
-#
-# Network-level access control on 8282 is still enforced by CiliumNetworkPolicy
-# (fromCIDR: 169.254.7.127/32 — the ztunnel probe SNAT address). This is
-# defense-in-depth: ztunnel permits the plaintext probe, Cilium restricts who
-# can send it.
-apiVersion: security.istio.io/v1
-kind: PeerAuthentication
-metadata:
-  name: opa-diag-permissive
-  namespace: register
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: opa
-  portLevelMtls:
-    8282:
-      mode: PERMISSIVE
----
-# Register app — allow plaintext kubelet health probes on the dedicated health port.
-#
-# register-server v2 separates the API port (8090, STRICT mTLS) from the
-# health-probe port (8091, PERMISSIVE). This mirrors the OPA pattern:
-#   port 8090 (API)    → PeerAuthentication STRICT (namespace default)
-#   port 8091 (probes) → PeerAuthentication PERMISSIVE (this policy)
-#
-# Network-level access control on 8091 is enforced by CiliumNetworkPolicy
-# (fromCIDR: 169.254.7.127/32 — the ztunnel probe SNAT address).
-apiVersion: security.istio.io/v1
-kind: PeerAuthentication
-metadata:
-  name: register-probe-permissive
-  namespace: register
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: register
-  portLevelMtls:
-    8091:
-      mode: PERMISSIVE
----
-# Frontend nginx pod — allow plaintext kubelet health probes on port 8080.
-#
-# nginx serves on port 8080 (non-privileged, uid 101). The kubelet probe
-# arrives via ztunnel SNAT (169.254.7.127) as plaintext. PERMISSIVE on 8080
-# allows the probe while all other traffic to the frontend must present a
-# valid mesh certificate (STRICT namespace default).
-#
-# Network-level access control is enforced by CiliumNetworkPolicy
-# allow-ingress-frontend-healthcheck (fromCIDR: 169.254.7.127/32).
-apiVersion: security.istio.io/v1
-kind: PeerAuthentication
-metadata:
-  name: frontend-probe-permissive
-  namespace: register
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: frontend
-  portLevelMtls:
-    8080:
-      mode: PERMISSIVE
----
-# Keycloak management port — allow plaintext kubelet health probes.
-#
-# Keycloak 26.x serves /health/live and /health/ready on management port 9000,
-# separate from the application port (8080). Kubelet probes arrive via ztunnel
-# SNAT as plaintext from 169.254.7.127. This workload-scoped PeerAuthentication
-# sets port 9000 to PERMISSIVE so ztunnel passes the plaintext probe through.
-#
-# Port 8080 (application) remains STRICT via the namespace-wide policy.
-#
-# Network-level access control on 9000 is enforced by CiliumNetworkPolicy
-# allow-ingress-keycloak-healthcheck (fromCIDR: 169.254.7.127/32).
-apiVersion: security.istio.io/v1
-kind: PeerAuthentication
-metadata:
-  name: keycloak-mgmt-permissive
-  namespace: infra
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: keycloak
-  portLevelMtls:
-    9000:
-      mode: PERMISSIVE
+# This is STRICTLY MORE SECURE than a port-level PERMISSIVE PeerAuthentication:
+# PERMISSIVE makes the port accept UNauthenticated traffic from any workload that
+# can reach it; the CiliumNP keeps the port STRICT-mTLS for all pod traffic and
+# lets only the unspoofable node-local kubelet probe through. It also removes the
+# THREAT-CATALOG concern about PERMISSIVE on frontend:8080 (which is both the app
+# port and the probe port) — 8080 is now fully STRICT for pod traffic.
+# (PostgreSQL uses exec probes on 127.0.0.1, which never touch the network.)
 ---
 # SpiceDB gRPC port — allow plaintext kubelet health probes on port 50051.
+#
+# PENDING: this is the last remaining PERMISSIVE exception, and it should not exist.
+# SpiceDB is accessed over HTTP REST (gRPC-gateway :8080) in this architecture, not
+# gRPC (ADR-INFRA-010) — we make no gRPC calls. The fix is to switch SpiceDB's
+# health probe from gRPC (:50051) to HTTP on the gateway, which removes the gRPC
+# probe and this exception together, bringing SpiceDB in line with the CiliumNP-only
+# approach used for every other service. Blocked only because SpiceDB is not yet
+# deployed (no secret). See ADR-INFRA-004 §4.
 #
 # SpiceDB serves gRPC health probes (grpc.health.v1.Health/Check) on port 50051.
 # Kubelet gRPC probes arrive via ztunnel SNAT (169.254.7.127) as plaintext.

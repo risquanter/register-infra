@@ -521,3 +521,35 @@ spec:
         - ports:
             - port: "8080"
               protocol: TCP
+---
+# Allow external clients to reach the ingress Gateway pod on its HTTPS listener.
+#
+# The register namespace is default-deny. External LoadBalancer traffic arrives at
+# the Gateway pod with Cilium identity `world`, so without this rule it is dropped
+# (curl → connection reset / no response). This is the ONLY pod in the namespace
+# with a `world` ingress allow, and it is scoped to port 443 only — the Gateway is
+# the intended public front door. Everything behind it stays default-deny, and L7
+# authorization (JWT validation, capability URLs, OPA ext_authz) is enforced at the
+# waypoint. No :80 rule — the Gateway is HTTPS-only (see istio/ingress-gateway.yaml).
+#
+# Selector: the label istiod places on pods it provisions for a `gatewayClassName:
+# istio` Gateway named `register-ingress`.
+#
+# HETZNER NOTE: verify the external source is still identity `world` there; if the
+# cloud LB path presents it as `host`/`remote-node`, add those to fromEntities.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-gateway-from-world
+  namespace: register
+spec:
+  endpointSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: register-ingress
+  ingress:
+    - fromEntities:
+        - world
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

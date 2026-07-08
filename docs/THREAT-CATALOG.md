@@ -27,30 +27,15 @@ Each finding has:
 
 ## HIGH
 
-### H1 · Frontend PeerAuthentication PERMISSIVE on Application Port
+### H1 · Frontend health probe — RESOLVED (no PERMISSIVE on the app port)
 
 | | |
 |---|---|
-| **File** | `infra/k8s/istio/peer-authentication.yaml` — `frontend-probe-permissive` |
-| **Finding** | Port-level `PERMISSIVE` is set on **port 8080**, which is BOTH the health-probe port AND the application-serving port for the nginx frontend. Unlike register (8090 API / 8091 health), keycloak (8080 app / 9000 management), and OPA (8181 API / 8282 diag), the frontend has **no port separation**. |
-| **Risk** | `PERMISSIVE` on the application port means ztunnel will accept plaintext (non-mTLS) connections to port 8080. A CiliumNetworkPolicy restricts non-mTLS access to `169.254.7.127/32` (kubelet SNAT), so exploitation requires **bypassing Cilium** (kernel exploit or eBPF escape). |
+| **Status** | Resolved. No PeerAuthentication PERMISSIVE exception exists for the frontend (or OPA/register/keycloak). |
+| **Design** | Frontend port 8080 (both app and probe port) is fully **STRICT** for pod-to-pod traffic. The kubelet health probe is plaintext but passes because, in ambient mode, ztunnel forwards kubelet probes to the app even under STRICT; the probe's source is scoped to the node-local SNAT address by CiliumNetworkPolicy `allow-ingress-frontend-healthcheck` (`fromCIDR: 169.254.7.127/32`). |
+| **Why this closes the threat** | The earlier concern was a port-level PERMISSIVE making 8080 accept *unauthenticated* traffic from any workload. That exception has been removed: nothing accepts plaintext on 8080 except the unspoofable node-local kubelet probe (enforced at the Cilium eBPF layer). This is strictly stronger than PERMISSIVE and needs no dedicated health port or Dockerfile change. |
 
-**Mitigating factors** (why this is less severe than initially assessed):
-1. Nginx serves static files only — no auth interceptors, no business logic, no secrets on the health path. A plaintext connection gets the same HTML/JS that any authenticated user would get.
-2. The CiliumNetworkPolicy `allow-ingress-frontend-healthcheck` restricts plaintext-eligible traffic to `169.254.7.127/32` on port 8080. All other traffic must arrive via ztunnel HBONE (mTLS).
-3. The waypoint enforces JWT + OPA on the API path (`/w/*`, `/workspaces/*`). Frontend-served static assets do not carry secrets.
-
-**Options**:
-
-| # | Option | Pros | Cons |
-|---|--------|------|------|
-| 1 | **Add a dedicated nginx health port (e.g. 8081)** — a minimal `server { listen 8081; location /healthz { return 200; } }` block in the Dockerfile, then PERMISSIVE only on 8081 and port 8080 becomes STRICT. | Matches register/keycloak/OPA pattern; eliminates PERMISSIVE on app port entirely. | Requires Dockerfile change in `register` repo, Helm chart update, PeerAuth + CiliumNP update. Moderate effort. |
-| 2 | **Accept current state with explicit risk documentation** — the CiliumNetworkPolicy + static-only content make the actual risk low. Document the accepted risk in an ADR. | Zero code change; honest about the threat model. | Leaves a pattern inconsistency across services. |
-| 3 | **Switch kubelet probes to exec-based** (like irmin: `wget -q localhost:8080/ -O /dev/null`). Exec probes don't traverse the network — no PeerAuthentication exception needed at all. | Removes PERMISSIVE entirely; no Dockerfile change. | Exec probes have different failure modes (OOM-killed wget), are less efficient, and don't match the httpGet pattern used by other services. |
-
-**Proposed**: Option 1 (dedicated health port) for consistency, but Option 2 is a reasonable alternative given the low actual risk. If Option 1 is chosen, it should be done in the `register` repo (Dockerfile.frontend-prod) first, then the infra charts updated.
-
-> **Note**: The register app (Scala/ZIO backend) already has the clean pattern — `HealthProbeServer` on port 8091 was added in commit `4be25c9` (2026-03-09). Keycloak 26.x natively separates to management port 9000. OPA uses diagnostics port 8282. The frontend is the only service without port separation.
+> Same design applies to OPA (8282), register (8091), and keycloak (9000) — all STRICT, kubelet probe scoped by CiliumNetworkPolicy. PostgreSQL uses exec probes (127.0.0.1). The only remaining port-level PERMISSIVE is SpiceDB's gRPC probe (50051), pending the same treatment once SpiceDB is deployed (see `peer-authentication.yaml`).
 
 ---
 

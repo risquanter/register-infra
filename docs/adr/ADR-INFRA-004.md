@@ -104,6 +104,25 @@ spec:
     mode: STRICT
 ```
 
+**Kubelet health probes pass under STRICT — no PERMISSIVE exception.** In ambient
+mode, ztunnel forwards node-local kubelet health probes to the application even
+though STRICT rejects unauthenticated pod traffic. The probe's source is scoped at
+the CNI layer by a CiliumNetworkPolicy allowing only the ztunnel probe SNAT address
+`169.254.7.127/32` to the probe port. Every probe port therefore stays STRICT for
+pod-to-pod traffic while the health check still succeeds (verified: pods pass HTTP
+liveness/readiness from scratch under namespace-wide STRICT with only the
+CiliumNetworkPolicy). A port-level PERMISSIVE PeerAuthentication is **unnecessary and
+strictly weaker** — see Code Smells. This covers OPA (8282), register (8091),
+frontend (8080, both app and probe port), and keycloak (9000); PostgreSQL uses exec
+probes on `127.0.0.1` and needs nothing.
+
+> **Temporary exception — SpiceDB gRPC probe (50051).** SpiceDB still carries a
+> PERMISSIVE exception for its gRPC health probe. It is not yet deployed, and the
+> intended resolution is *not* to verify gRPC-under-STRICT but to switch its health
+> probe to the HTTP gRPC-gateway: SpiceDB is accessed over **HTTP REST** in this
+> architecture (ADR-INFRA-010), not gRPC, so an HTTP probe removes both the gRPC
+> probe and the exception, bringing SpiceDB in line with the rule above.
+
 ### 5. DNS Egress Always Allowed
 
 Every default-deny namespace must include a DNS egress rule.
@@ -213,6 +232,36 @@ metadata:
 # PeerAuthentication: STRICT
 ```
 
+### ❌ PERMISSIVE Port Exception for Health Probes
+
+```yaml
+# BAD: to admit the kubelet probe, this opens the port to UNauthenticated
+# (plaintext) traffic from ANY workload that can reach it. Strictly weaker than
+# the CiliumNetworkPolicy approach — and worse on frontend:8080, which is also
+# the application-serving port.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata: { name: frontend-probe-permissive }
+spec:
+  selector: { matchLabels: { app.kubernetes.io/name: frontend } }
+  portLevelMtls:
+    8080: { mode: PERMISSIVE }
+```
+
+```yaml
+# GOOD: the port stays STRICT mTLS for all pod traffic. ztunnel forwards the
+# kubelet probe under STRICT; a CiliumNetworkPolicy scopes the plaintext-eligible
+# source to the node-local probe SNAT address only (unspoofable at the eBPF layer).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: { name: allow-ingress-frontend-healthcheck }
+spec:
+  endpointSelector: { matchLabels: { app.kubernetes.io/name: frontend } }
+  ingress:
+    - fromCIDR: [169.254.7.127/32]
+      toPorts: [{ ports: [{ port: "8080", protocol: TCP }] }]
+```
+
 ---
 
 ## Implementation
@@ -221,7 +270,7 @@ metadata:
 |----------|---------|
 | `infra/k8s/network-policy/register.yaml` | Default-deny + HBONE allow + per-service rules (topology docs) + DNS egress |
 | `infra/k8s/network-policy/infra.yaml` | Default-deny + allow rules + DNS egress for infra ns |
-| `infra/k8s/istio/peer-authentication.yaml` | STRICT mTLS for register, argocd, and infra namespaces; port-level PERMISSIVE for health probe ports |
+| `infra/k8s/istio/peer-authentication.yaml` | STRICT mTLS for register, argocd, and infra namespaces. Health probe ports stay STRICT — kubelet probes pass via ztunnel + a `169.254.7.127/32` CiliumNetworkPolicy (no PERMISSIVE; SpiceDB gRPC 50051 is a temporary exception) |
 | `infra/k8s/istio/authorization-policy.yaml` | AuthorizationPolicy with `targetRef` → waypoint Gateway |
 | `infra/k8s/istio/` (planned) | Waypoint Gateway resource for register namespace |
 

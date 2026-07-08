@@ -1,0 +1,17 @@
+# Self-signed ClusterIssuer for LOCAL dev TLS.
+#
+# The ingress Gateway terminates HTTPS on :443 and needs a certificate. Locally
+# there is no domain or public CA, so cert-manager issues a self-signed cert
+# (browsers/curl need -k / an added trust exception — acceptable for local dev).
+#
+# ENVIRONMENT-SPECIFIC: this issuer is local-dev only. Hetzner must instead use
+# an ACME (Let's Encrypt) ClusterIssuer bound to the real domain + a DNS-01/HTTP-01
+# solver. The Gateway, HTTPRoute, Certificate, and NetworkPolicy are environment-
+# agnostic; only this issuer swaps. That swap is part of the multi-environment
+# overlay work (see TODO.md § Multi-Environment Values Overlay + Phase 4).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-local
+spec:
+  selfSigned: {}
