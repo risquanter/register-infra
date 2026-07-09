@@ -386,14 +386,17 @@
 
 ## Open — Phase 3: Hardening (independent of L2 path)
 
-- [ ] **[next teardown cycle]** register↔irmin startup-ordering resilience — register
-  self-terminates with `Irmin health check returned false` and CrashLoopBackOffs when it
-  starts before mesh-policy has applied the register↔irmin HBONE/NetworkPolicy rules (or
-  before irmin's GraphQL is ready). It self-heals on retry once policies land, but the
-  crash-loop is noisy and slows every fresh bootstrap. Fix options: an initContainer that
-  waits for `irmin:8080` reachability, a longer startup `initialDelaySeconds`, or a bounded
-  retry on the irmin health check in the app. Bundle into the next batch so the next
-  rebuild verifies register comes up clean without the transient crash-loop.
+- [x] register↔irmin startup-ordering resilience — **app-side fix landed** (register repo,
+  2026-07-09): `StartupReadiness.awaitReady` gate — jittered exponential backoff capped at
+  5s, bounded by `IRMIN_HEALTHCHECK_BUDGET` (total elapsed budget, default 45s in-app),
+  fail-closed after the budget. See register's ADR-031 (startup readiness vs request-path
+  resilience) and NOTES.md. `infra/helm/register/values.yaml` now sets
+  `IRMIN_HEALTHCHECK_BUDGET=90s` — a conservative initial estimate (2x the app default) for
+  full fresh-cluster bootstrap, not yet empirically measured against this cluster.
+  - [ ] **[next teardown cycle]** Verify on a real rebuild: register should retry and
+    recover instead of crash-looping while mesh-policy/irmin converge. If the crash-loop is
+    gone but takes noticeably long, or if it still crash-loops (budget too short), tune
+    `IRMIN_HEALTHCHECK_BUDGET` accordingly and record the observed reconcile time here.
 - [ ] Automated SpiceDB bats test (regression coverage for HTTP reachability + schema load) — can land after Step 1
 - [ ] Retire the last PERMISSIVE exception — switch SpiceDB's kubelet health probe from gRPC (:50051) to HTTP on the gateway (:8080), then delete `spicedb-grpc-probe-permissive` from `peer-authentication.yaml`. SpiceDB is accessed over HTTP REST here (no gRPC calls, ADR-INFRA-010), so the gRPC probe — and its PERMISSIVE exception — are avoidable. Every other service is already STRICT + CiliumNP-only (ADR-INFRA-004 §4)
 - [ ] Promote PeerAuthentication to mesh-wide STRICT in `istio-system` (currently per-namespace)

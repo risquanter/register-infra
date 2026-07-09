@@ -36,7 +36,10 @@ spec:
         {{- include "spicedb.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: db-init
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name }}
+      # No serviceAccountName: this Job only talks to PostgreSQL via psql, never
+      # the Kubernetes API. Binding it to the "spicedb" ServiceAccount would create
+      # an ordering deadlock — this PreSync hook runs before that plain-resource
+      # ServiceAccount exists.
       automountServiceAccountToken: false
       restartPolicy: OnFailure
 

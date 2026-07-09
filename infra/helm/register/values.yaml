@@ -61,6 +61,20 @@ env:
   # Irmin URL: the irmin Service in the same namespace (register).
   - name: IRMIN_URL
     value: "http://irmin.register.svc.cluster.local:8080"
+  # Startup readiness budget for the register→irmin dependency (register app
+  # ADR-031, StartupReadiness.awaitReady). register and irmin are both wave 4,
+  # gated behind mesh-policy at wave 3 — but ArgoCD's sync-wave only waits for
+  # NetworkPolicy/AuthorizationPolicy objects to be Synced, not for the ambient
+  # mesh dataplane (ztunnel) to finish programming them. That gap is the
+  # register↔irmin startup race in docs/TODO.md Phase 3 / register NOTES.md.
+  # 90s is a conservative initial estimate — 2x the app's in-app default (45s)
+  # to cover full fresh-cluster bootstrap where ztunnel/istiod are themselves
+  # still converging across many namespaces at once, not just a single-pod
+  # steady-state restart. Not yet empirically measured against this cluster;
+  # tune down once real reconcile latency is observed (see docs/TODO.md
+  # Phase 3 "register↔irmin startup-ordering resilience").
+  - name: IRMIN_HEALTHCHECK_BUDGET
+    value: "90s"
 
 # imagePullSecrets references the GHCR pull secret created during bootstrap.
 # Disabled for local dev (image pre-imported via k3d image import).
