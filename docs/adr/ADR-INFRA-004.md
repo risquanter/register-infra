@@ -272,7 +272,7 @@ spec:
 | `infra/k8s/network-policy/infra.yaml` | Default-deny + allow rules + DNS egress for infra ns |
 | `infra/k8s/istio/peer-authentication.yaml` | STRICT mTLS for register, argocd, and infra namespaces. Health probe ports stay STRICT — kubelet probes pass via ztunnel + a `169.254.7.127/32` CiliumNetworkPolicy (no PERMISSIVE; SpiceDB gRPC 50051 is a temporary exception) |
 | `infra/k8s/istio/authorization-policy.yaml` | AuthorizationPolicy with `targetRef` → waypoint Gateway |
-| `infra/k8s/istio/` (planned) | Waypoint Gateway resource for register namespace |
+| waypoint (register ns) | Deployed imperatively via `istioctl waypoint apply -n register --enroll-namespace` (Istio runtime object, not a committed manifest) |
 
 ---
 

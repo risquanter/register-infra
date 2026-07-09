@@ -234,6 +234,24 @@
       invalid tokens. Verify actual codes and reconcile with the register team if the
       BATS assertions need amending — do not silently change either side
 
+**§test-personas** *(new 2026-07-08 — precondition for §seed-relationships below)*
+> **Insight:** OPA's coarse role gate (`allow.rego` `recognized_roles :=
+> {"analyst", "editor", "viewer", "team_admin"}`) is **mode-agnostic** — always
+> enforced, regardless of `REGISTER_AUTH_MODE`. This means alice/bob/carol
+> (AUTH-TESTING-PLAN's fine-grained personas) need *some* recognized Keycloak
+> role each purely to clear OPA before ever reaching SpiceDB — their **SpiceDB
+> relationship**, not their Keycloak role, is the actual thing under test.
+> This is a *different axis* from the existing `demo-editor`/`demo-analyst`/
+> `demo-viewer`/`demo-admin` realm users, which test OPA's Layer 1 role gate
+> specifically. No redesign needed — alice/bob/carol are a standard, valid
+> ReBAC test-persona set (owner / viewer / no-relation), same convention
+> SpiceDB's own docs use. The gap is purely that the accounts don't exist yet.
+- [ ] Add 3 users to `infra/helm/keycloak/realms/register-realm-dev.json`: `alice`,
+  `bob`, `carol` — each with a baseline recognized role (e.g. `viewer`) sufficient
+  to clear the OPA gate. Their SpiceDB relationship (below) is what actually varies.
+- [ ] Record each user's Keycloak `sub` (UUID) — required for both SpiceDB
+  relationship tuples and the BATS `ALICE_JWT`/`BOB_JWT`/`CAROL_JWT`/`*_SUB` env contract
+
 **§seed-relationships** *(for demo + BATS §L2 — must match AUTH-TESTING-PLAN pre-seeded state)*
 - [ ] Seed test tuples via port-forward (user IDs are Keycloak `sub` UUIDs):
   ```bash
@@ -263,7 +281,16 @@
   - **Scope: team/org relations only** (`editor`, `analyst`, `viewer`, `team_admin`, `org_member`).
     **Never manage `owner_user`/`owner_team`** — those are app-lifecycle-written (Wave 6);
     BATS B-K6-4 asserts the job leaves them untouched
-  *For now: manual port-forward invocation; automated via ARC runner in Phase 4 (Step 5).*
+  *For now: manual port-forward invocation. Verified 2026-07-08: `.github/workflows/` only has
+  Terraform CI (unrelated); the register app repo has no CI at all; a GitHub-hosted runner has
+  no network path to a local k3d cluster regardless. So "wire to CI" is not a dependency gap —
+  it correctly comes after the Phase 4 ARC self-hosted runner exists, not before.*
+  - [ ] **Design session (guided)**: walk through, interactively, before implementing —
+    the config file schema for "intended state" (org→team→workspace assignments), the
+    implementation approach (bash+`zed` CLI vs. a small Go/Python tool), where org/team
+    membership data originates from, and how the job gets invoked locally pre-CI. Options,
+    engineering trade-offs, and best practices to be presented for a joint decision, not
+    picked unilaterally by the agent.
 - [x] K.6 app service-account write scoping — **decision made 2026-07-06: defer (Option A)**.
   SpiceDB (OSS) has no mechanism to scope a preshared key to specific relations — the
   `owner_user`/`owner_team`-only write restriction in IMPL-PLAN's L2.0 exit criterion is
@@ -271,9 +298,14 @@
   SpiceDB itself. For the current phase (local-dev, single operator, no untrusted tenants) a
   single shared preshared key stays as-is; real enforcement is deferred to the Hetzner
   planning item below (Option C). See that item for the full A/B/C option analysis.
-- [ ] K.6 CI/CD deployment workflow: Helm-based `helm upgrade --install` for `local-dev` target,
-  triggered manually or on `main` push; post-deploy smoke check **must include the header-spoofing
-  gate** (B-K5-1–3 — IMPL-PLAN K.6 checklist: "header spoofing test is gated in K.6 CI post-deploy step")
+- [ ] K.6 CI/CD deployment workflow — **corrected 2026-07-08**: cannot be real CI/CD against
+  `local-dev` (GitHub-hosted runners have no network path to a local k3d cluster). Split:
+  - [ ] Now: a manually-invoked `helm upgrade --install` + smoke-check script (same shape as
+    the provisioning job above), including the header-spoofing gate (B-K5-1–3 — IMPL-PLAN
+    K.6 checklist: "header spoofing test is gated in K.6 CI post-deploy step")
+  - [ ] Real CI/CD (build+test on every push, deploy-on-merge): lands against **Hetzner**
+    once it's reachable — GitHub-hosted runners *can* reach a public Hetzner IP, so this is
+    achievable there without waiting for the ARC self-hosted runner. See Phase 4a.
 
 ---
 
@@ -321,17 +353,30 @@
   Foundation re-verified in the same rebuild: keycloak DB, kyverno, ArgoCD-ambient all green;
   the `register` app deployed from `local/register-server:dev` (⚠ confirm this is built from
   current `main` before trusting L2 behavior — see the operational note at the top of this file).
-- [ ] **Production certificate scheme (incremental, do near the end of Hetzner rollout)** —
-  replace the self-signed issuer with a best-practice OSS/free scheme: a
-  cert-manager **ACME `ClusterIssuer` (Let's Encrypt)** bound to the real domain
-  with an HTTP-01 (via the ingress Gateway) or DNS-01 solver, auto-renewing. Not a
-  dirty hack — this is the standard cert-manager production pattern. The Gateway,
-  `Certificate`, HTTPRoute, and NetworkPolicy do not change; only the issuer swaps
-  (see the Multi-Environment Values Overlay item — the issuer is the env-specific piece).
-  Optionally add an HTTP→HTTPS 301-redirect listener for browser UX.
+- [ ] **Production certificate scheme — decided 2026-07-08, execute as Phase 4b** (after
+  Phase 4a bare-IP rollout, see Phase 4 below). Domain: **risquanter.com** (already owned,
+  registered at a local provider that operates via **support tickets** — DNS changes are
+  manual/slow, not self-service or API-driven). Hostname: **register.risquanter.com**.
+  DNS stays at the registrar (simplest, no reason to delegate elsewhere).
+  - **HTTP-01, not DNS-01** — chosen specifically because of the support-ticket DNS friction:
+    HTTP-01 needs the A record set **once** (one support ticket), then Let's Encrypt's
+    automatic challenge/renewal needs no further DNS involvement ever. DNS-01 would need a
+    TXT record change (another support ticket) on every renewal cycle — operationally bad
+    fit here. Revisit only if a wildcard cert is ever needed.
+  - Replace the self-signed issuer with a cert-manager **ACME `ClusterIssuer` (Let's
+    Encrypt)** — free, no cost, standard cert-manager production pattern. The Gateway,
+    `Certificate`, HTTPRoute, and NetworkPolicy do **not** change; only the issuer swaps
+    (see the Multi-Environment Values Overlay item — the issuer is the env-specific piece).
+  - [ ] Submit support ticket: A record `register.risquanter.com` → Hetzner server's public IP
+  - [ ] Swap `infra/k8s/cert-manager/` `ClusterIssuer` from `selfsigned-local` to an ACME
+    issuer (HTTP-01 solver via the existing ingress Gateway)
+  - [ ] Verify: `curl https://register.risquanter.com/` gets a browser-trusted cert, no `-k` needed
+  - Optionally add an HTTP→HTTPS 301-redirect listener for browser UX.
 - [ ] **Keycloak externally reachable** — a browser/client can reach Keycloak to
   complete the OIDC login and obtain a JWT (today Keycloak is internal-only).
   Requires an ingress route to Keycloak + `KC_HOSTNAME_STRICT`/hostname pinned.
+  Hostname not yet decided (e.g. a subdomain under risquanter.com) — follows the same
+  bare-IP-first (Phase 4a) → real-hostname (Phase 4b) split as the register app once chosen.
 - [ ] **Real end-to-end round-trip** (not port-forward, not a hand-minted token):
   browser → Keycloak login → JWT → `https://<host>/w/<key>/…` → OPA gate →
   SpiceDB fine-grained check → allowed/denied as the schema dictates.
@@ -357,12 +402,12 @@
 
 ---
 
-## ⚠ UNDER DESIGN — Multi-Environment Values Overlay (decide before Phase 4)
+## ✅ DECIDED — Multi-Environment Values Overlay (ADR-INFRA-014; implement before Phase 4b)
 
-> **Status: not scoped, not agreed, not started.** This is not part of the original
-> AUTH-PLAN/Phase rollout — it surfaced 2026-07-06 while investigating the
-> `register-server` image-tag drift bug (see git history on this date) and is recorded
-> here so it isn't lost, not because it's been committed to.
+> **Status: decided 2026-07-08, not yet implemented.** Full reasoning and rejected
+> alternatives in [ADR-INFRA-014](adr/ADR-INFRA-014.md). Surfaced 2026-07-06 while
+> investigating the `register-server` image-tag drift bug — not part of the original
+> AUTH-PLAN/Phase rollout.
 
 **The problem:** every Helm chart with environment-specific values (`register`, `keycloak`,
 and eventually `spicedb`) currently has exactly **one** `values.yaml`, hand-edited in place
@@ -387,20 +432,48 @@ env-specific piece of the ingress (Gateway/HTTPRoute/Certificate/NetworkPolicy a
 so it is the minimal, concrete driver for this overlay decision: some `infra/k8s/` resources must
 be selectable per environment. Until resolved, Hetzner must not blindly sync the self-signed issuer.
 
-**Open questions, not yet decided:**
-- [ ] How to make specific `infra/k8s/` resources (starting with the cert-manager ClusterIssuer) environment-selectable — per-env directories + per-env `mesh-policy` Applications, Kustomize overlays, or excluding env-specific resources from the shared glob.
-- [ ] Scope: just `register` + `keycloak` (the two charts with real env-specific values today), or every chart pre-emptively?
-- [ ] Whether this needs a second ArgoCD instance on the Hetzner cluster (pointed at the same repo, different values/destination) or one ArgoCD instance managing both clusters via `destination.server`
-- [ ] Whether to land this **before** Phase 4 starts (clean split from day one) or **as part of** Phase 4 (Hetzner forces the split anyway, so do it once)
-- [ ] Draft as an ADR-INFRA before implementing — this changes how every future environment-specific value gets added, not just a one-time fix
+> **Timing clarified 2026-07-08**: Phase 4a (Hetzner, bare IP) can reuse the *same*
+> self-signed issuer as local — no collision yet, since neither environment needs ACME.
+> The collision only becomes real at the **4a→4b transition**, when Hetzner needs ACME
+> while local still needs self-signed. This decision must land before Phase 4b (the
+> DNS/cert step), not before Phase 4a — narrows the "before vs. as part of Phase 4"
+> question below to specifically "before Phase 4b."
+
+**Decided (ADR-INFRA-014):**
+- [x] Resource-selectability mechanism: **Option A — directory split** (`infra/k8s/shared/` +
+  `infra/k8s/local/` + `infra/k8s/hetzner/`), not Kustomize, not an ad-hoc carve-out. Mirrors
+  the same "shared base + per-env overlay" model chosen for Helm charts — one consistent
+  pattern repo-wide instead of a different answer per file type.
+- [x] Scope: `register`, `keycloak`, `frontend`, `irmin` charts (surveyed all 7 charts;
+  these 4 have real environment-coupled values today — image provenance/pull policy,
+  hostname, realm file). `opa` and `spicedb` pull digest-pinned registry images identically
+  in both environments and need no overlay (SpiceDB will need one later for its TLS URL
+  scheme once Hetzner gets real PKI — tracked in Phase 4a).
+- [x] **Two independent ArgoCD instances**, one per cluster, neither registered as a remote
+  cluster in the other — no live credential ever crosses the boundary (mirrors ADR-INFRA-011's
+  rejection of exported kubeconfigs for CI). Every `Application.spec.destination.server` stays
+  `https://kubernetes.default.svc` in both. Consequence: `mesh-policy` becomes two Applications
+  (one per cluster's ArgoCD instance), each syncing `infra/k8s/shared` + its own `infra/k8s/<env>`.
+
+**Implementation checklist (not started):**
+- [ ] Split `infra/k8s/` into `shared/` (11 of today's 12 files) + `local/cert-manager/` +
+  `hetzner/cert-manager/` (per ADR-INFRA-014 §3)
+- [ ] Convert `register`, `keycloak`, `frontend`, `irmin` charts to `values.yaml` +
+  `values-local.yaml` (extract today's local-only settings) — `values-hetzner.yaml` follows
+  once Hetzner specifics are known (Phase 4)
+- [ ] Bootstrap Hetzner's own ArgoCD instance (Phase 4a) — see "Bootstrap doc restructure"
+  housekeeping item for the shared platform-bootstrap doc this should follow
+- [ ] Update `infra/argocd/apps/mesh-policy.yaml` to multi-source (`infra/k8s/shared` +
+  `infra/k8s/local`) on the local instance; create the Hetzner-instance equivalent pointing
+  at `infra/k8s/shared` + `infra/k8s/hetzner` when Phase 4a starts
 
 ---
 
-## ⚠ UNDER DESIGN — SpiceDB Write-Scoping Enforcement (elaborate before Phase 4)
+## ✅ DECIDED — SpiceDB Write-Scoping Enforcement (ADR-INFRA-015; implement before Phase 4b)
 
-> **Status: decision made for now (defer), real enforcement not yet planned.** Surfaced
-> 2026-07-06 while reviewing the K.6 app service-account scoping requirement. Recorded here
-> so the deferral doesn't quietly become permanent by default.
+> **Status: decided 2026-07-08, not yet implemented.** Full reasoning and rejected
+> alternatives in [ADR-INFRA-015](adr/ADR-INFRA-015.md). Surfaced 2026-07-06 while
+> reviewing the K.6 app service-account scoping requirement.
 
 **The problem:** SpiceDB (OSS/self-hosted) has no mechanism to scope a preshared key to a
 subset of relations or operations — a valid key grants full read/write access to the entire
@@ -428,32 +501,87 @@ compromised process holding the shared token.
   its own test suite, latency on every SpiceDB write, and an ongoing obligation to keep the
   allow-list in lockstep with `schema.zed`.
 
-**Decision:** **A for now.** C is the leading candidate for real enforcement, but is
-**not yet planned** — no ADR, no design, no sizing.
+**Decided (ADR-INFRA-015): B + C.** Separate preshared keys per calling component
+(register-server vs. the K.6 runner) *and* an OPA/Envoy ext_authz gateway fronting
+SpiceDB, enforcing a per-workload-identity relation-type allowlist on writes. Reasoning:
+the product's three trust layers (public/Layer 0, small-team/Layer 1, enterprise/Layer 2)
+share one SpiceDB backend on Hetzner — a compromise of the Layer-0-facing app must not
+reach Layer-2 org/team relations. Known, accepted residual gap: this scopes *which
+relation types* a caller may write, not *which specific resource instances* — a full RCE
+compromise of register-server can still forge `owner_user` on an arbitrary workspace
+(any workspace, not just its own). Closing that further was evaluated and rejected (see
+ADR-INFRA-015 "Alternatives Rejected" — it would require re-implementing
+`BootstrapProvisioner`'s own correctness logic a second time in Rego). B+C substantially
+reduces blast radius from "full authorization-graph takeover" to "workspace-ownership
+forgery + broad read access" — it does not reduce it to zero, and is not a substitute
+for hardening register-server against compromise in the first place.
 
-**Open questions, not yet decided:**
-- [ ] Draft as an ADR-INFRA before implementing Option C
-- [ ] Confirm Option C is actually warranted at Hetzner scale (single-operator prod vs. genuinely multi-tenant) before committing the engineering cost
-- [ ] If C is deferred again at that point, reword the IMPL-PLAN L2.0 exit criterion (register repo) to stop claiming credential-level scoping that doesn't exist — an inaccurate exit criterion is worse than an honest gap
-- [ ] Whether Option B is worth doing as a cheap interim step regardless of the A vs. C timeline (isolation-of-exposure, not access control)
+**Implementation checklist (not started):**
+- [ ] Create `infra/secrets/spicedb-register.enc.yaml` and `runner-spicedb-token.enc.yaml`
+  (the latter's path already planned in ADR-INFRA-011 §4) — separate preshared keys
+- [ ] Update `infra/helm/spicedb/values.yaml`/`spicedb.enc.yaml` to a comma-joined
+  `preshared-key` covering both callers
+- [ ] Deploy a waypoint for the `infra` namespace (does not exist yet — only `register` has one)
+- [ ] Build `infra/k8s/opa/spicedb-write-gate.yaml` (EnvoyFilter) + `spicedb_write_gate.rego`
+  (per-identity relation allowlist) + its unit test suite
+- [ ] Resolve the HTTP-vs-gRPC body-inspection question (register-server calls SpiceDB over
+  HTTP/8080, the runner over gRPC/50051 per ADR-INFRA-011 §3 — flagged as an open
+  implementation detail in ADR-INFRA-015, not yet solved)
+- [ ] If this is ever deferred again in practice, reword the IMPL-PLAN L2.0 exit criterion
+  (register repo) to stop claiming credential-level scoping that doesn't exist
 
 ---
 
 ## Open — Phase 4: Hetzner Migration (K.7)
 
+> **Gate — decided 2026-07-08: Phase 4 does not start until L2 Path Steps 1–4 are
+> complete and verified locally** (Step 5 "Usable Exposure" passing against the local
+> cluster). Provisioning real paid infrastructure before local fine-grained auth actually
+> works would mean debugging L2 issues on Hetzner instead of localhost — strictly worse.
+>
+> **Sequencing — decided 2026-07-08**: two sub-phases. **4a** stands up Hetzner reachable
+> by bare IP only, with the **full GitOps aim from day one** (not a shortcut skipped because
+> it's IP-only) — this is where nearly everything below lives. **4b** is the short,
+> DNS/certificate-only follow-up once a domain is pointed at it (see Step 5 "Production
+> certificate scheme" for the concrete plan — domain, hostname, and DNS approach are
+> already decided). Domain (risquanter.com) is already owned; nothing about 4a depends on it.
+
+### Phase 4a — Hetzner, bare IP, full GitOps
+
 > **Note**: K.6 ARC runner (schema apply automation) is part of this phase.
 > Until ARC is live, schema apply is manual port-forward (Step 2 §schema above).
+>
+> Real CI/CD (build+test on push, deploy on merge) becomes achievable here — unlike
+> local-dev, GitHub-hosted runners *can* reach a public Hetzner IP. See Step 3's K.6
+> CI/CD item.
 
-- [ ] Istio Gateway + HTTPRoute (requires domain name + DNS A record + cert-manager ClusterIssuer)
-- [ ] `KC_HOSTNAME_STRICT=true` (currently false; pin when external hostname is stable)
+- [ ] Istio Gateway + HTTPRoute + **self-signed** `ClusterIssuer` reachable via the
+  server's bare public IP — same pattern already built and verified for local dev
+  (`infra/k8s/istio/ingress-gateway.yaml`, `selfsigned-issuer.yaml`). No domain needed yet.
+- [ ] `KC_HOSTNAME_STRICT=true` — can pin to the bare IP initially; revisit once Keycloak's
+  own external hostname is decided (Step 5 "Keycloak externally reachable")
 - [ ] Terraform remote state (S3-compatible backend for multi-operator / CI access)
 - [ ] Keycloak realm switch (`realmFile: realms/register-realm-prod.json` in Keycloak Helm values)
 - [ ] SpiceDB TLS: switch from HTTP to HTTPS with cert-manager cert + JVM trust injection once a
   real PKI exists (ADR-INFRA-010). App side needs no type change — `MeshServiceUrl` already
   accepts https; for internet-facing (non-mesh) endpoints the app would use `SecureUrl` instead
-- [ ] ARC controller + runner namespace (CI automation for SpiceDB schema lifecycle, ADR-INFRA-011)
+- [ ] ARC controller + runner namespace (CI automation for SpiceDB schema lifecycle, ADR-INFRA-011).
+  **Not the same thing as the YubiKey below** — the YubiKey secures git commit signing / SOPS
+  decryption (who you are), it does not give a workflow network access to the cluster (what a
+  runner needs). ARC solves reachability by living *inside* the cluster; no kubeconfig ever
+  leaves it (ADR-INFRA-011's explicit reasoning for rejecting the "export kubeconfig to GH
+  Secrets" alternative).
 - [ ] Runner NetworkPolicy (scoped egress to `spicedb:50051` for `zed` CLI gRPC)
 - [ ] YubiKey dual-recipient SOPS (add second recipient to `.sops.yaml` + re-encrypt all secrets)
+  — you already have a YubiKey provisioned for GitHub read/write; confirm it's usable as an
+  `age-plugin-yubikey` SOPS recipient alongside `sops-age-key` (see `SOPS-YUBIKEY-MODEL.md`)
+
+### Phase 4b — DNS + real certificate (see Step 5 for the full plan)
+
+- [ ] Submit support ticket: A record `register.risquanter.com` → Hetzner public IP
+- [ ] Swap `ClusterIssuer` from self-signed to ACME/Let's Encrypt (HTTP-01) — requires the
+  Multi-Environment Values Overlay decision above (self-signed for local, ACME for Hetzner)
+- [ ] Verify browser-trusted HTTPS, no `-k`/cert warnings
 
 ---
 
