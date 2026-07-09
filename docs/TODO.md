@@ -53,7 +53,7 @@
 ### L0 — Workspace Capability (capability-only mode)
 
 - [x] `REGISTER_AUTH_MODE=capability-only` in register Helm values
-- [x] AuthorizationPolicy: public routes `/w/*`, `/workspaces/*`, `/health`
+- [x] AuthorizationPolicy: public routes `/w/*`, `/workspaces` (exact bootstrap path — corrected 2026-07-09; a `/workspaces/*` prefix rule never matched `POST /workspaces`), `/health`
 - [x] OPA `allow.rego`: health + capability routes bypass role checks
 
 ### L1 — Identity + Ownership (infra side)

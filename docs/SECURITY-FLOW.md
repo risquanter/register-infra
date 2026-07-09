@@ -147,8 +147,9 @@
 
 ④ WORKSPACE KEY  →  Application (Scala/ZIO)
                      Layer 0: workspace key in URL = sole credential (free tier).
-                     Public routes (`/w/*`, `/workspaces/*`) bypass both the
-                     AuthorizationPolicy (no JWT required) and OPA (no role check).
+                     Public routes (`/w/*`, `/workspaces` — the exact bootstrap
+                     path, POST /workspaces) bypass both the AuthorizationPolicy
+                     (no JWT required) and OPA (no role check).
                      Layer 1: key is an invitation token; x-user-id (from ①–③) also required.
 
 ⑤ INSTANCE AUTHZ →  SpiceDB (app layer — future Layer 2)

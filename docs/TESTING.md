@@ -155,7 +155,7 @@ bats tests/bats/mtls-enforcement.bats
 43 tests in `tests/opa/allow_test.rego` covering:
 
 - Health endpoint bypass (`/health`)
-- Layer 0 public route bypass (`/w/*`, `/workspaces/*` — no identity required)
+- Layer 0 public route bypass (`/w/*`, `/workspaces` — no identity required; OPA matches the first path segment, so this covers the exact bootstrap path `POST /workspaces`)
 - Role-based access for `analyst`, `editor`, `viewer`, `team_admin`
 - Viewer read allowed, viewer write protection (POST/PUT/PATCH/DELETE denied)
 - Admin-only cache management gate
@@ -262,7 +262,8 @@ kubectl -n infra port-forward svc/keycloak 8081:80 &
 
 ### Layer 0 — Capability URL (no identity)
 
-Layer 0 routes (`/w/*`, `/workspaces/*`) require only the workspace key.
+Layer 0 routes (`/w/*`, and the exact bootstrap path `/workspaces`) require
+only the workspace key (bootstrap needs no credential at all in this mode).
 No JWT, no identity header. The waypoint's AuthorizationPolicy marks
 these as public, and OPA's allow policy bypasses role checks.
 

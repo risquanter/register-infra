@@ -18,9 +18,11 @@ spec:
   # HOW THIS INTERACTS WITH SECURITY
   # With targetRef, ztunnel does not evaluate this policy. L4 enforcement is
   # provided by PeerAuthentication STRICT (mTLS required for all mesh traffic).
-  # JWT and path enforcement are activated when the waypoint Gateway is deployed
-  # (production / Hetzner phase). In local k3d (no waypoint), no JWT enforcement
-  # is in effect — this is acceptable for dev. See Ambiguity A4 in action plan.
+  # JWT and path enforcement run at the waypoint, which IS deployed (in every
+  # environment, local included — `istioctl waypoint apply -n register
+  # --enroll-namespace` during bootstrap; see ADR-INFRA-004 §Implementation).
+  # All service-addressed traffic to register-namespace workloads traverses it,
+  # so the rules below are live policy, not dormant scaffolding.
   targetRef:
     group: gateway.networking.k8s.io
     kind: Gateway
@@ -61,17 +63,24 @@ spec:
         - operation:
             paths:
               - "/w/*"                # Layer 0 capability routes (ADR-021)
+              - "/workspaces"         # workspace bootstrap — EXACT path, see below
               - "/health"             # always public (route matrix row 1)
-      # NOTE: no /workspaces* entry here. The bootstrap endpoint is an EXACT
-      # path, `POST /workspaces` (WorkspaceLifecycleEndpoints.scala — no
-      # trailing slash, no /bootstrap suffix; that's just the endpoint's
-      # internal name). A "/workspaces/*" prefix rule never matched it (Istio
-      # treats it as prefix "/workspaces/", which the shorter exact string
-      # can't satisfy) and no other route lives under /workspaces, so it was
-      # dead weight that falsely implied a public surface here. Per Wave 6,
-      # bootstrap now requires auth anyway (x-user-id claim) — it's already
-      # reachable via require-jwt's path-agnostic ALLOW rule above whenever a
-      # valid JWT is presented; no explicit entry is needed in this policy.
+      # /workspaces is deliberately the EXACT path, not "/workspaces/*". The
+      # bootstrap endpoint is `POST /workspaces` (WorkspaceLifecycleEndpoints
+      # .scala — no trailing slash; "bootstrap" is only the endpoint's internal
+      # name), and Istio reads "/workspaces/*" as prefix "/workspaces/", which
+      # the shorter exact string never matches. No other route lives under
+      # /workspaces, so the exact entry covers precisely the bootstrap call.
+      #
+      # WHY PUBLIC IN ALL AUTH MODES: in capability-only mode (Layer 0) the SPA
+      # creates a workspace anonymously — no JWT exists, so the waypoint must
+      # admit the request or the core L0 flow 403s at the front door. In
+      # identity/fine-grained modes the app itself rejects unauthenticated
+      # bootstrap (UserContextExtractor.requirePresent → x-user-id claim
+      # required, Wave 6), so this entry does not weaken those modes: the
+      # waypoint gate is path-level, the mode-aware identity gate is app-level,
+      # and OPA ext_authz still evaluates every request (allow.rego treats
+      # /workspaces as a Layer 0 public route, matching this policy).
 
 # ── REMOVED: deny-forwarded-identity-headers ─────────────────────────────────
 #

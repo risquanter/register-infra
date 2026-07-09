@@ -80,20 +80,22 @@ spec:
             - sh
             - -euc
             - |
+              # \gexec is not honored inside a -c command string (it only works when
+              # psql reads a script from stdin/-f), so the conditional-create SQL is
+              # piped in via stdin instead of passed to -c.
               echo "==> Creating spicedb database (idempotent)"
-              psql \
-                -h {{ .Values.dbInit.postgresHost }} \
-                -U postgres \
-                -c "SELECT 'CREATE DATABASE spicedb' \
-                    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'spicedb')\gexec"
+              printf '%s\n' \
+                "SELECT 'CREATE DATABASE spicedb'" \
+                "WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'spicedb')" \
+                '\gexec' \
+                | psql -h {{ .Values.dbInit.postgresHost }} -U postgres
 
               echo "==> Creating spicedb_user role (idempotent)"
-              psql \
-                -h {{ .Values.dbInit.postgresHost }} \
-                -U postgres \
-                -v SPICEDB_PASS="$SPICEDB_DB_PASSWORD" \
-                -c "SELECT format('CREATE ROLE spicedb_user WITH LOGIN PASSWORD %L', :'SPICEDB_PASS') \
-                    WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'spicedb_user')\gexec"
+              printf '%s\n' \
+                "SELECT format('CREATE ROLE spicedb_user WITH LOGIN PASSWORD %L', :'SPICEDB_PASS')" \
+                "WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'spicedb_user')" \
+                '\gexec' \
+                | psql -h {{ .Values.dbInit.postgresHost }} -U postgres -v SPICEDB_PASS="$SPICEDB_DB_PASSWORD"
 
               echo "==> Granting privileges"
               psql \

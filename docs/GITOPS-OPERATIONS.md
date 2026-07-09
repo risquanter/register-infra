@@ -219,7 +219,7 @@ Open Policy Agent with the `envoy_ext_authz_grpc` plugin. Key design decisions:
 | File | What it enforces |
 |---|---|
 | [istio/request-authentication.yaml](../infra/k8s/istio/request-authentication.yaml) | Validates JWT signatures against Keycloak's JWKS endpoint; `outputClaimToHeaders` injects `x-user-id`, `x-user-email`, `x-user-roles`; audience validation (`register-api`) prevents token confusion |
-| [istio/authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml) | Requires valid JWT on authenticated routes; exempts public routes (`/w/*`, `/workspaces/*`, `/health`) |
+| [istio/authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml) | Requires valid JWT on authenticated routes; exempts public routes (`/w/*`, `/workspaces` — exact bootstrap path, `/health`) |
 | [istio/envoy-filter-strip-headers.yaml](../infra/k8s/istio/envoy-filter-strip-headers.yaml) | Strips forged identity headers (`x-user-id`, `x-user-email`, `x-user-roles`) before JWT validation |
 | [istio/peer-authentication.yaml](../infra/k8s/istio/peer-authentication.yaml) | STRICT mTLS for `register`, `argocd`, and `infra` namespaces. Health probe ports stay STRICT — kubelet probes pass via ztunnel + a `169.254.7.127/32` CiliumNetworkPolicy, no PERMISSIVE (only SpiceDB's gRPC 50051 exception remains, pending) |
 | [opa/ext-authz-filter.yaml](../infra/k8s/opa/ext-authz-filter.yaml) | Routes waypoint authorization checks to OPA gRPC (port 9191, 100ms timeout, fail-closed) |
