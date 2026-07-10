@@ -160,13 +160,23 @@
   (label set by `_helpers.tpl` in local chart — same convention as all other charts in this repo)
   — confirmed 2026-07-10: both replicas `1/1 Running`, ArgoCD `Health Status: Healthy`, `Sync Status: Synced to HEAD (55a0bf8)`
 - [x] Verify PDB: `kubectl -n infra get pdb` — confirmed 2026-07-10: `spicedb` `MIN AVAILABLE 1`, `ALLOWED DISRUPTIONS 1`
-- [ ] Verify HTTP reachable from register namespace:
-  ```bash
-  kubectl -n register run -it --rm verify-spicedb --image=curlimages/curl --restart=Never -- \
-    curl -si -H "Authorization: Bearer <preshared-key>" \
-    http://spicedb.infra.svc.cluster.local:8080/v1/schema/read
-  ```
-  Expected: `200 OK` with empty or existing schema JSON
+- [x] Verify HTTP reachable from register namespace — **passed 2026-07-10**, with three corrections
+  to the originally planned command (kept here for the future BATS smoke test):
+  - The pod needs a full `restricted`-PSS security context (`runAsNonRoot`, `runAsUser: 100`,
+    `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`) —
+    bare `kubectl run` is rejected by the namespace's PSS enforcement.
+  - The pod needs the label `app.kubernetes.io/name: register` — the spicedb egress/ingress
+    NetworkPolicies select source pods by it; unlabeled pods fall into default-deny (curl exit 56).
+  - `/v1/schema/read` is a **POST** endpoint (`curl -X POST -H "Content-Type: application/json" -d '{}'`);
+    a GET returns `501` gRPC code 12.
+  Result on empty datastore: `404` `{"code":5,"message":"no schema has been defined; please call
+  WriteSchema to start"}` — this is the pass condition pre-Step-2 (valid key accepted, gateway reached
+  through the mesh). A wrong key would return 401/403.
+  **Bug found & fixed by this test (2026-07-10)**: cross-namespace ambient traffic travels over HBONE
+  port 15008 (not the app port), but `register.yaml`'s egress rules to infra services only allowed the
+  app ports → default-deny dropped register→spicedb (and would have hit register→postgres/keycloak
+  too). Added port 15008 to all three egress rules + corrected the stale L3 comment
+  (`infra/k8s/network-policy/register.yaml`).
 
 ---
 
@@ -179,8 +189,20 @@
 > for this step is operational: **a register image built from current `main` deployed**
 > to the cluster. `schema.zed` can be applied independently of that.
 
-**§schema**
-- [ ] Apply `infra/spicedb/schema.zed` from `register` repo checkout via port-forward:
+**§schema** ✅ — applied + verified 2026-07-10
+- [x] Applied without `zed` (not installed locally): SpiceDB's HTTP gateway accepts schema
+  writes directly, so a port-forward + curl suffices:
+  ```bash
+  kubectl -n infra port-forward svc/spicedb 18080:8080 &   # 8080 was taken locally
+  jq -Rs '{schema: .}' ~/projects/register/infra/spicedb/schema.zed \
+    | curl -s -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+      -d @- http://localhost:18080/v1/schema/write
+  # verify: POST /v1/schema/read with -d '{}' returns the full schemaText
+  ```
+  Read-back confirmed all definitions (user, organization, team, workspace, risk_tree) incl.
+  the `admin_workspace` permission.
+- [x] ~~Apply via `zed schema write`~~ — original plan below, kept for reference (zed CLI still
+  the right tool for the K.6 runner / Phase 4):
   ```bash
   kubectl -n infra port-forward svc/spicedb 8080:8080 &
   zed schema write --endpoint localhost:8080 --token <preshared-key> \
@@ -193,8 +215,12 @@
   - Note: schema includes `permission admin_workspace = owner_user + owner_team->manage_team`
     (added beyond AUTH-PLAN §L2.1 original — required by Wave 5 rotate/delete; AUTH-PHASES Phase 0)
 
-**§register-helm-values**
-- [ ] Add to `infra/helm/register/values.yaml` env block:
+**§register-helm-values** ✅ — done 2026-07-10 (`SPICEDB_URL`/`SPICEDB_TOKEN` in
+`infra/helm/register/values.yaml`; secret created as `infra/secrets/spicedb-register.enc.yaml`,
+name `spicedb-preshared-key-register`, key `spicedb-preshared-key`, ns `register` — same token
+value as `spicedb-credentials`. ⚠ `SPICEDB_TOKEN`'s secretKeyRef is not `optional`, so apply the
+secret before syncing the register app: `sops --decrypt infra/secrets/spicedb-register.enc.yaml | kubectl apply -f -`)
+- [x] Add to `infra/helm/register/values.yaml` env block:
   ```yaml
   - name: SPICEDB_URL          # confirmed name — application.conf `spicedb.url = ${?SPICEDB_URL}`
     value: "http://spicedb.infra.svc.cluster.local:8080"   # HTTP in-cluster — mesh encrypts

@@ -75,6 +75,22 @@ env:
   # Phase 3 "register↔irmin startup-ordering resilience").
   - name: IRMIN_HEALTHCHECK_BUDGET
     value: "90s"
+  # SpiceDB fine-grained authorization backend (ADR-INFRA-010, TODO Step 2
+  # §register-helm-values). Ignored while REGISTER_AUTH_MODE=capability-only;
+  # consulted once the mode switches to fine-grained. HTTP in-cluster — the
+  # ambient mesh (HBONE mTLS) provides encryption; MeshServiceUrl accepts http.
+  - name: SPICEDB_URL
+    value: "http://spicedb.infra.svc.cluster.local:8080"
+  # Preshared key, from the register-namespace copy of the SpiceDB credential
+  # (infra/secrets/spicedb-register.enc.yaml — applied manually like the other
+  # SOPS secrets: sops --decrypt <file> | kubectl apply -f -).
+  # NOT optional — if the secret is missing, the pod will not start. Apply the
+  # secret to the cluster BEFORE syncing this chart.
+  - name: SPICEDB_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: spicedb-preshared-key-register
+        key: spicedb-preshared-key
 
 # imagePullSecrets references the GHCR pull secret created during bootstrap.
 # Disabled for local dev (image pre-imported via k3d image import).
