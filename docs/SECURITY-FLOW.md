@@ -97,8 +97,8 @@
 > [GITOPS-OPERATIONS.md — Troubleshooting](GITOPS-OPERATIONS.md#troubleshooting).
 > Current state: infra probes are healthy — CiliumNetworkPolicy allows only
 > `169.254.7.127/32` (the ztunnel probe SNAT source) to reach health probe
-> ports. Those ports stay STRICT mTLS; ztunnel forwards the kubelet probe under
-> STRICT, so no PERMISSIVE exception is used.
+> ports; the ports stay STRICT mTLS, no PERMISSIVE exception. Full mechanism:
+> ADR-INFRA-004 §4 (canonical).
 
 ---
 

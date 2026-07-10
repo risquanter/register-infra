@@ -385,15 +385,14 @@ kill $PF_PID 2>/dev/null || true
 >
 > **Current solution (committed):**
 > - **CiliumNetworkPolicy** `allow-ingress-keycloak-healthcheck` permits only
->   `169.254.7.127/32` (the ztunnel probe SNAT source) to reach port 9000. The
->   port stays STRICT mTLS; ztunnel forwards the kubelet probe under STRICT, so
->   **no PERMISSIVE PeerAuthentication is needed** — strictly more secure than a
->   PERMISSIVE port exception, which would accept unauthenticated traffic from
->   any workload that can reach it.
+>   `169.254.7.127/32` (the ztunnel probe SNAT source) to reach port 9000; the
+>   port stays STRICT mTLS and **no PERMISSIVE PeerAuthentication is needed**.
+>   Full mechanism and rationale: ADR-INFRA-004 §4 (canonical).
 > - PostgreSQL uses `exec` probes (`pg_isready` on `127.0.0.1`) which bypass
 >   the network and require no CiliumNetworkPolicy
-> - The same CiliumNetworkPolicy-only pattern covers OPA (8282), register
->   (8091), and frontend (8080) in the register namespace
+> - The same pattern covers every mesh-enrolled service with a network probe
+>   port — the authoritative list is the `allow-ingress-*-healthcheck` rules
+>   in `infra/k8s/network-policy/`
 >
 > **Rollback (if future changes break probes):**
 

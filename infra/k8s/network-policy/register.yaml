@@ -244,18 +244,16 @@ spec:
 ---
 # Allow kubelet health probes to reach the OPA diagnostic port (8282).
 #
-# SECURITY NOTE: In Istio ambient mode, ztunnel uses SNAT to rewrite the source
-# of kubelet health probes to 169.254.7.127 (a well-known link-local address)
-# before they enter the pod's network namespace. This causes Cilium to see the
-# probe as identity "world" instead of "host", so fromEntities: host does not
-# match. fromCIDR: 169.254.7.127/32 targets exactly the ztunnel probe SNAT
-# address — only traffic that ztunnel has already identified as a health probe
-# reaches OPA on port 8282 via this path.
+# SECURITY NOTE: ztunnel SNATs kubelet probes to 169.254.7.127 (Cilium sees
+# identity "world", not "host"); fromCIDR: 169.254.7.127/32 admits exactly that
+# probe path and nothing else. Full mechanism: ADR-INFRA-004 §4 (canonical).
 #
 # Defense-in-depth layers on port 8282:
 #   1. ztunnel SNAT: only local kubelet probes are rewritten to 169.254.7.127
 #   2. CiliumNetworkPolicy: only 169.254.7.127 is allowed to reach 8282
-#   3. PeerAuthentication (opa-diag-permissive): port 8282 accepts plaintext
+#   3. PeerAuthentication: STRICT — pod-to-pod traffic to 8282 must present a
+#      mesh certificate; ztunnel forwards the kubelet probe under STRICT, so
+#      no PERMISSIVE exception exists (ADR-INFRA-004 §4)
 #   4. No Service exposes 8282 — cluster-external access is impossible
 #   5. OPA's diagnostic port also serves /metrics (Prometheus), but only the
 #      ztunnel-SNATted kubelet can reach 8282, and it never requests /metrics

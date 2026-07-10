@@ -106,15 +106,23 @@ spec:
 
 **Kubelet health probes pass under STRICT — no PERMISSIVE exception.** In ambient
 mode, ztunnel forwards node-local kubelet health probes to the application even
-though STRICT rejects unauthenticated pod traffic. The probe's source is scoped at
-the CNI layer by a CiliumNetworkPolicy allowing only the ztunnel probe SNAT address
-`169.254.7.127/32` to the probe port. Every probe port therefore stays STRICT for
-pod-to-pod traffic while the health check still succeeds (verified: pods pass HTTP
-liveness/readiness from scratch under namespace-wide STRICT with only the
-CiliumNetworkPolicy). A port-level PERMISSIVE PeerAuthentication is **unnecessary and
-strictly weaker** — see Code Smells. This covers OPA (8282), register (8091),
-frontend (8080, both app and probe port), and keycloak (9000); PostgreSQL uses exec
-probes on `127.0.0.1` and needs nothing.
+though STRICT rejects unauthenticated pod traffic. ztunnel SNATs the probe's source
+to the link-local address `169.254.7.127` before it enters the pod's netns, so
+Cilium sees identity `world` (not `host`) — under default-deny the probe is dropped
+unless a CiliumNetworkPolicy admits exactly `fromCIDR: 169.254.7.127/32` to the
+probe port. Every probe port therefore stays STRICT for pod-to-pod traffic while
+the health check still succeeds (verified: pods pass HTTP liveness/readiness from
+scratch under namespace-wide STRICT with only the CiliumNetworkPolicy). A
+port-level PERMISSIVE PeerAuthentication is **unnecessary and strictly weaker** —
+see Code Smells.
+
+**This section is the canonical explanation of the probe-SNAT mechanism.** Other
+files state one line and link here — do not restate the mechanism elsewhere. The
+authoritative list of covered services is the set of `allow-ingress-*-healthcheck`
+CiliumNetworkPolicies in `infra/k8s/network-policy/` (register, infra, and argocd
+namespaces) — enumerated lists in prose drift; the rules themselves do not.
+Exceptions that need no rule: services probed by `exec` on `127.0.0.1` (e.g.
+PostgreSQL's `pg_isready`), which never touch the network.
 
 > **Temporary exception — SpiceDB gRPC probe (50051).** SpiceDB still carries a
 > PERMISSIVE exception for its gRPC health probe. It is not yet deployed, and the

@@ -31,7 +31,7 @@ Infrastructure as Code and GitOps configuration for the **register** platform.
 | **Local development** (start here) | [docs/LOCAL-K3D-BOOTSTRAP.md](docs/LOCAL-K3D-BOOTSTRAP.md) | Fresh Debian + Docker |
 | Production deploy (Hetzner Cloud) | [docs/K3S-GITOPS-BOOTSTRAP.md](docs/K3S-GITOPS-BOOTSTRAP.md) | Hetzner account + Terraform |
 | **GitOps operations reference** | [docs/GITOPS-OPERATIONS.md](docs/GITOPS-OPERATIONS.md) | — |
-| Learning / reference | [docs/K3S-MANUAL-INSTALL.md](docs/K3S-MANUAL-INSTALL.md) | — |
+| Learning / reference (archived) | [docs/archive/K3S-MANUAL-INSTALL.md](docs/archive/K3S-MANUAL-INSTALL.md) | — |
 | Validation / CI | [docs/K8S-TESTING.md](docs/K8S-TESTING.md) | Running cluster |
 | Security architecture | [docs/SECURITY-FLOW.md](docs/SECURITY-FLOW.md) | — |
 

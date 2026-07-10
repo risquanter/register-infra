@@ -10,15 +10,11 @@
 # i/o timeout → repo-server and application-controller CrashLoopBackOff.
 #
 # WHY CiliumNetworkPolicy AND NOT PeerAuthentication PERMISSIVE
-# In ambient mode ztunnel already lets kubelet probes reach the app WITHOUT mTLS,
-# even while the port stays STRICT for all pod-to-pod traffic — verified: fresh
-# pods pass their probes from scratch under a namespace-wide STRICT PeerAuthentication.
-# So the ONLY thing that ever blocked the probe was Cilium's L3/L4 default-deny of
-# the SNAT source. Allowing just that link-local source is strictly more secure than
-# a PERMISSIVE port-level mTLS exception: the metrics/health port never accepts
-# plaintext from any pod, only the node-local kubelet probe (169.254.7.127/32, which
-# is unreachable from other pods or off-node). This keeps repo-server's sensitive
-# gRPC surface (8081, credentials + config-management code execution) fully STRICT.
+# Standard probe-SNAT pattern — full mechanism: ADR-INFRA-004 §4 (canonical,
+# not restated here). What matters specifically for ArgoCD: the CiliumNP-only
+# approach keeps repo-server's sensitive gRPC surface (8081, credentials +
+# config-management code execution) fully STRICT; a PERMISSIVE port exception
+# would not.
 #
 # Only repo-server (8084) and application-controller (8082) need this — the other
 # argocd components' chart NetworkPolicies do not default-deny their probe ports.

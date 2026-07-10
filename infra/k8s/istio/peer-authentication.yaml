@@ -48,23 +48,13 @@ spec:
 ---
 # ── Kubelet health probes need NO per-port PERMISSIVE exception ──────────────
 #
-# In ambient mode, ztunnel passes kubelet health probes through to the app even
-# under STRICT mTLS (verified: pods pass HTTP liveness/readiness from scratch
-# under namespace-wide STRICT with only the CiliumNetworkPolicy below). So every
-# app/probe port stays STRICT for pod-to-pod traffic, and the ONLY thing that
-# reaches a probe port in plaintext is the node-local kubelet probe — scoped by
-# CiliumNetworkPolicy `fromCIDR: 169.254.7.127/32` (the ztunnel probe SNAT
-# address). The relevant allow-ingress-*-healthcheck rules live in
-# network-policy/{register,infra}.yaml:
-#   OPA 8282, register 8091, frontend 8080, keycloak 9000.
-#
-# This is STRICTLY MORE SECURE than a port-level PERMISSIVE PeerAuthentication:
-# PERMISSIVE makes the port accept UNauthenticated traffic from any workload that
-# can reach it; the CiliumNP keeps the port STRICT-mTLS for all pod traffic and
-# lets only the unspoofable node-local kubelet probe through. It also removes the
-# THREAT-CATALOG concern about PERMISSIVE on frontend:8080 (which is both the app
-# port and the probe port) — 8080 is now fully STRICT for pod traffic.
-# (PostgreSQL uses exec probes on 127.0.0.1, which never touch the network.)
+# ztunnel forwards node-local kubelet probes under STRICT; the probe source
+# (SNAT'd to 169.254.7.127) is admitted per-port by the
+# allow-ingress-*-healthcheck CiliumNetworkPolicies in infra/k8s/network-policy/
+# — those rules are the authoritative list of covered services. This is strictly
+# more secure than a port-level PERMISSIVE exception, which would accept
+# unauthenticated traffic from any workload that can reach the port.
+# Full mechanism: ADR-INFRA-004 §4 (canonical — not restated here).
 ---
 # SpiceDB gRPC port — allow plaintext kubelet health probes on port 50051.
 #
@@ -84,8 +74,6 @@ spec:
 # Port 8080 (HTTP gRPC-gateway REST, app client) remains STRICT.
 # Port 50051 plaintext access is further restricted to 169.254.7.127/32
 # by CiliumNetworkPolicy allow-ingress-spicedb-grpc-healthcheck.
-#
-# Same pattern as: opa-diag-permissive (8282), keycloak-mgmt-permissive (9000).
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:

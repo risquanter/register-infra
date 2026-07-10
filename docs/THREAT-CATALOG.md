@@ -35,7 +35,7 @@ Each finding has:
 | **Design** | Frontend port 8080 (both app and probe port) is fully **STRICT** for pod-to-pod traffic. The kubelet health probe is plaintext but passes because, in ambient mode, ztunnel forwards kubelet probes to the app even under STRICT; the probe's source is scoped to the node-local SNAT address by CiliumNetworkPolicy `allow-ingress-frontend-healthcheck` (`fromCIDR: 169.254.7.127/32`). |
 | **Why this closes the threat** | The earlier concern was a port-level PERMISSIVE making 8080 accept *unauthenticated* traffic from any workload. That exception has been removed: nothing accepts plaintext on 8080 except the unspoofable node-local kubelet probe (enforced at the Cilium eBPF layer). This is strictly stronger than PERMISSIVE and needs no dedicated health port or Dockerfile change. |
 
-> Same design applies to OPA (8282), register (8091), and keycloak (9000) — all STRICT, kubelet probe scoped by CiliumNetworkPolicy. PostgreSQL uses exec probes (127.0.0.1). The only remaining port-level PERMISSIVE is SpiceDB's gRPC probe (50051), pending the same treatment once SpiceDB is deployed (see `peer-authentication.yaml`).
+> Same design applies to every mesh-enrolled service with a network probe port — the authoritative list is the `allow-ingress-*-healthcheck` CiliumNetworkPolicies in `infra/k8s/network-policy/`; full mechanism: ADR-INFRA-004 §4 (canonical). PostgreSQL uses exec probes (127.0.0.1). The only remaining port-level PERMISSIVE is SpiceDB's gRPC probe (50051), pending the same treatment once SpiceDB is deployed (see `peer-authentication.yaml`).
 
 ---
 
