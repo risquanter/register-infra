@@ -34,10 +34,25 @@ deny[msg] {
     msg := sprintf("CiliumNetworkPolicy '%s' allows multiple ports — each healthcheck should expose exactly one port", [input.metadata.name])
 }
 
-# No CiliumNetworkPolicy should use fromEntities: world (overly permissive).
+# No CiliumNetworkPolicy may use fromEntities: world — with exactly one
+# documented exception: the ingress Gateway front door (ADR-INFRA-013 §3).
+# The exception is narrow on purpose: it must carry the canonical name, select
+# only the Gateway pod (gateway-name label), and admit port 443 and nothing
+# else. Any other world-ingress rule — or a loosened version of this one —
+# still fails.
 deny[msg] {
     input.kind == "CiliumNetworkPolicy"
     entity := input.spec.ingress[_].fromEntities[_]
     entity == "world"
-    msg := sprintf("CiliumNetworkPolicy '%s' uses fromEntities: world — too permissive for health probes", [input.metadata.name])
+    not is_gateway_front_door
+    msg := sprintf("CiliumNetworkPolicy '%s' uses fromEntities: world — only the ingress Gateway front door may (ADR-INFRA-013 §3: gateway-name selector + port 443 only)", [input.metadata.name])
+}
+
+is_gateway_front_door {
+    input.metadata.name == "allow-ingress-gateway-from-world"
+    # Must select the Gateway pod specifically, never the whole namespace.
+    input.spec.endpointSelector.matchLabels["gateway.networking.k8s.io/gateway-name"]
+    # All ports admitted from world must be exactly {443}.
+    ports := {p.port | p := input.spec.ingress[_].toPorts[_].ports[_]}
+    ports == {"443"}
 }
