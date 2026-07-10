@@ -12,9 +12,16 @@
 #      endpoints. NetworkPolicy enforcement may become inconsistent.
 #      Fix: restart Cilium DaemonSet.
 #
-#   3. CoreDNS DNS forwarding failure — upstream DNS forwarders may become
-#      unreachable or stale. Pods get SERVFAIL for external DNS queries.
-#      Fix: restart CoreDNS.
+#   3. CoreDNS DNS forwarding failure — Docker writes the k3d node container's
+#      /etc/resolv.conf once, at container start, from whatever the host's
+#      DNS resolvers were at that moment. If the host's DNS changes afterward
+#      (new network, VPN, wake from sleep with a new DHCP lease), that file
+#      goes stale and every pod gets SERVFAIL on external DNS queries —
+#      including CoreDNS's own upstream forwarding (`forward . /etc/resolv.conf`
+#      in the Corefile), since restarting the CoreDNS pod alone just re-reads
+#      the same stale file. Fix: restart the k3d node container itself (forces
+#      Docker to regenerate resolv.conf from current host state), then
+#      restart CoreDNS to pick it up.
 #
 #   4. ArgoCD ComparisonError — if ArgoCD couldn't reach the git remote during
 #      sleep, all git-sourced Applications show ComparisonError. They recover
@@ -54,6 +61,47 @@ if ! kubectl cluster-info &>/dev/null; then
   exit 1
 fi
 echo "    Cluster reachable."
+echo
+
+# ── Step 0: Ensure k3d node has working DNS ──────────────────────────────────
+#
+# Must run before Steps 1-3: a stale node resolv.conf breaks DNS for every
+# pod, and fixing it means restarting the node container, which already
+# bounces every pod on it (Cilium, ztunnel, CoreDNS included). Checking this
+# first avoids doing that restart twice.
+
+NODE_CONTAINER="k3d-${CLUSTER_NAME}-server-0"
+
+echo ">>> Step 0: Checking k3d node DNS..."
+if [[ "$DRY_RUN" == true ]]; then
+  echo "    [dry-run] would test DNS resolution inside ${NODE_CONTAINER}, restart it if broken"
+else
+  if docker exec "$NODE_CONTAINER" sh -c 'nslookup github.com' &>/dev/null; then
+    echo "    Node DNS OK."
+  else
+    echo "    Node DNS is broken (stale resolv.conf) — restarting node container..."
+    docker restart "$NODE_CONTAINER" &>/dev/null
+
+    echo "    Waiting for kubelet to come back..."
+    for i in $(seq 1 30); do
+      kubectl get nodes &>/dev/null && break
+      sleep 2
+    done
+
+    echo "    Waiting for Cilium agent-not-ready taint to clear..."
+    for i in $(seq 1 30); do
+      taint=$(kubectl get node "$NODE_CONTAINER" -o jsonpath='{.spec.taints[?(@.key=="node.cilium.io/agent-not-ready")]}' 2>/dev/null)
+      [[ -z "$taint" ]] && break
+      sleep 3
+    done
+
+    if docker exec "$NODE_CONTAINER" sh -c 'nslookup github.com' &>/dev/null; then
+      echo "    Node DNS fixed."
+    else
+      echo "    WARNING: node DNS still broken after restart. Check host DNS (resolvectl status)."
+    fi
+  fi
+fi
 echo
 
 # ── Step 1: Restart Cilium (stale CEP) ───────────────────────────────────────
