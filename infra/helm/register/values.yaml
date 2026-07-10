@@ -1,11 +1,15 @@
 image:
   repository: local/register-server
   # tag matches the local compose build (register repo): `docker compose build register-server`.
-  # docker-compose.yml tags it `local/register-server:${APP_VERSION:-dev}` — resolves to
-  # "dev" when no .env file sets APP_VERSION (the normal local-dev case).
-  # Import into k3d with: k3d image import local/register-server:dev -c register-dev
+  # docker-compose.yml tags it `local/register-server:${APP_VERSION:-dev}`; the register
+  # repo's .env pins APP_VERSION (build.sbt `ThisBuild / version` is the source of truth),
+  # so per deploy: build → `k3d image import local/register-server:<version> -c register-dev`
+  # → bump this tag → commit+push (ArgoCD rolls the deployment on the values change).
+  # Versioned tags (not a mutable "dev") make the running build identifiable and give
+  # ArgoCD a real diff to roll on — push only AFTER the import, or the pod goes
+  # ErrImageNeverPull (pullPolicy: Never).
   # In production (Hetzner), Image Updater will overwrite this with the real GHCR digest.
-  tag: "dev"
+  tag: "0.3.0"
   pullPolicy: Never
 
 # Number of application replicas.

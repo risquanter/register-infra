@@ -1,6 +1,6 @@
 apiVersion: v2
 name: register
-description: Helm chart for the register application. Image tag is managed by ArgoCD Image Updater — do not edit image.tag manually.
+description: Helm chart for the register application. In production (GHCR) the image tag is managed by ArgoCD Image Updater — do not edit image.tag manually there. Local dev deploys by bumping image.tag to the compose-built version (see values.yaml).
 type: application
 version: 0.1.0
-appVersion: "0.0.0"  # informational only; actual image tag is in values.yaml
+appVersion: "0.3.0"  # informational only; actual image tag is in values.yaml
