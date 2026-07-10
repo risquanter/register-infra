@@ -131,6 +131,26 @@ PostgreSQL's `pg_isready`), which never touch the network.
 > architecture (ADR-INFRA-010), not gRPC, so an HTTP probe removes both the gRPC
 > probe and the exception, bringing SpiceDB in line with the rule above.
 
+**Checklist — enrolling a new service in the mesh.** The probe rules are
+hand-written per service; forgetting one presents as liveness-probe i/o timeouts
+and CrashLoopBackOff shortly after enrollment. Before enrolling, walk this list:
+
+1. Network probe port (`httpGet`/`grpc`/`tcpSocket`)? → add an
+   `allow-ingress-<svc>-healthcheck` CiliumNetworkPolicy
+   (`fromCIDR: 169.254.7.127/32` → the probe port) in the namespace's
+   network-policy file. `exec` probes need nothing.
+2. Namespace (or the service's own chart) default-denies ingress? → confirm
+   HBONE (TCP 15008) intra-namespace ingress is allowed, or pod-to-pod calls
+   to the service will drop after enrollment.
+3. Rendered pod labels must match the policy's `endpointSelector` — verify
+   against the chart's `_helpers.tpl`, not from memory.
+
+The per-service copies are a deliberate trade-off: maximal explicitness and
+per-port least privilege, at the cost of one hand-written rule per service. A
+generalized mechanism (Helm library template or a port-scoped
+CiliumClusterwideNetworkPolicy) has been considered and not adopted — revisit
+if the copy count or omission incidents grow.
+
 ### 5. DNS Egress Always Allowed
 
 Every default-deny namespace must include a DNS egress rule.

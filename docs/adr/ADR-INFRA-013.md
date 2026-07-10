@@ -53,6 +53,56 @@ reachability ≠ authorization.
 
 ---
 
+## Code Smells
+
+### ❌ Enabling kube-proxy-replacement alongside Istio ambient
+
+```yaml
+# BAD: kpr breaks istiod/ztunnel startup (see Alternatives Rejected)
+# cilium helm values
+kubeProxyReplacement: true
+
+# GOOD: Cilium as CNI + NetworkPolicy only; kube-proxy + klipper own the
+# service datapath
+kubeProxyReplacement: false
+```
+
+### ❌ Plaintext listener on the external Gateway
+
+```yaml
+# BAD: JWTs and capability URLs (credentials) cross the wire in cleartext
+listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+
+# GOOD: TLS-only; :80 exists only ever as a 301 redirect, never a content listener
+listeners:
+  - name: https
+    port: 443
+    protocol: HTTPS
+    tls: { mode: Terminate, certificateRefs: [{ name: register-ingress-tls }] }
+```
+
+### ❌ Broad `world` allow instead of a Gateway-scoped one
+
+```yaml
+# BAD: admits external traffic to every pod in the namespace
+endpointSelector: {}
+ingress:
+  - fromEntities: [world]
+
+# GOOD: only the Gateway pod, only :443 — the single intended front door
+endpointSelector:
+  matchLabels:
+    gateway.networking.k8s.io/gateway-name: register-ingress
+ingress:
+  - fromEntities: [world]
+    toPorts: [{ ports: [{ port: "443", protocol: TCP }] }]
+```
+
+---
+
 ## Alternatives Rejected
 
 ### Cilium kube-proxy-replacement (`kubeProxyReplacement=true`)

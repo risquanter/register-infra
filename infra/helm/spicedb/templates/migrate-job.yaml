@@ -1,0 +1,74 @@
+---
+# SpiceDB datastore schema migration — Helm pre-install + pre-upgrade hook.
+#
+# db-init-job.yaml only creates the `spicedb` PostgreSQL database and
+# `spicedb_user` role; SpiceDB itself will not leave NOT_SERVING until its own
+# schema tables (relation_tuple_transaction, alembic_version, etc.) exist.
+# `spicedb datastore migrate head` creates/updates those tables and is safe to
+# re-run — it's a no-op once the datastore is already at head, and uses its own
+# locking so concurrent runs don't race.
+#
+# Runs after db-init-job (hook-weight -5) so the database/role already exist,
+# and before the Deployment (default weight 0, not a hook) so SpiceDB pods
+# never start against an unmigrated datastore.
+#
+# Image: ghcr.io/authzed/spicedb — same image/digest as the Deployment
+# (ADR-INFRA-012 T2 approval already recorded in values.yaml for this digest).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "spicedb.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spicedb.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: hook-succeeded
+    helm.sh/hook-weight: "-3"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "spicedb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      # No serviceAccountName: this Job only talks to PostgreSQL, never the
+      # Kubernetes API — same reasoning as db-init-job.yaml.
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}@{{ .Values.image.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          args: ["datastore", "migrate", "head"]
+
+          env:
+            - name: SPICEDB_DATASTORE_ENGINE
+              value: "postgres"
+            - name: SPICEDB_DATASTORE_CONN_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.secretName }}
+                  key: datastore-uri
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
