@@ -122,8 +122,8 @@
 > App-side dependency: none. `register` Wave 3 not needed yet.
 > Ref: ADR-INFRA-010, ADR-INFRA-002 (fail-closed availability).
 
-**§secrets**
-- [ ] Create `infra/secrets/spicedb.enc.yaml` (SOPS age encryption, same key as `keycloak.enc.yaml`):
+**§secrets** ✅ — created and applied 2026-07-10
+- [x] Create `infra/secrets/spicedb.enc.yaml` (SOPS age encryption, same key as `keycloak.enc.yaml`):
   ```yaml
   apiVersion: v1
   kind: Secret
@@ -138,8 +138,9 @@
   - Preshared-key constraint (app side, ADR-022/`SpiceDbToken`): printable ASCII, ≤2048 chars — `openssl rand -hex` output satisfies this
   - `spicedb_user` password must match what the DB-init Job sets (use the same value)
   - Encrypt: `sops --encrypt --age "$(grep 'public key' ~/.config/sops/age/keys.txt | awk '{print $4}')" spicedb-plain.yaml > infra/secrets/spicedb.enc.yaml && rm spicedb-plain.yaml`
+  - Applied to cluster 2026-07-10: `sops --decrypt infra/secrets/spicedb.enc.yaml | kubectl apply -f -`
 
-**§local-chart** ✅ — all files created 2026-07-05
+**§local-chart** ✅ — all files created 2026-07-05; migration hook added 2026-07-10
 - [x] `infra/helm/spicedb/Chart.yaml`
 - [x] `infra/helm/spicedb/values.yaml` (ADR-INFRA-012 T2 approval record, v1.53.0, digest-pinned)
 - [x] `infra/helm/spicedb/templates/_helpers.tpl`
@@ -147,16 +148,18 @@
 - [x] `infra/helm/spicedb/templates/deployment.yaml`
 - [x] `infra/helm/spicedb/templates/service.yaml` (ports 8080 http + 50051 grpc)
 - [x] `infra/helm/spicedb/templates/pdb.yaml` (minAvailable: 1, ADR-INFRA-002)
-- [x] `infra/helm/spicedb/templates/db-init-job.yaml` (Helm pre-install/pre-upgrade hook)
+- [x] `infra/helm/spicedb/templates/db-init-job.yaml` (Helm pre-install/pre-upgrade hook; fixed 2026-07-10 — dropped the `serviceAccountName` reference that deadlocked against PreSync hook ordering, and rewrote the `\gexec` SQL to pipe via stdin since `psql -c` doesn't honor it)
+- [x] `infra/helm/spicedb/templates/migrate-job.yaml` (**new 2026-07-10** — PreSync hook, `hook-weight: "-3"`, runs `spicedb datastore migrate head` after db-init; SpiceDB pods stayed `NOT_SERVING` without this — db-init only creates the database/role, not SpiceDB's own schema tables)
 - [x] `helm lint infra/helm/spicedb` — 0 errors
 
 **§argocd-app** ✅
 - [x] `infra/argocd/apps/spicedb.yaml` created — single-source local chart, `project: infra`, `CreateNamespace=false`
 
 **§smoke-test**
-- [ ] Verify SpiceDB pods healthy: `kubectl -n infra get pods -l app.kubernetes.io/name=spicedb`
+- [x] Verify SpiceDB pods healthy: `kubectl -n infra get pods -l app.kubernetes.io/name=spicedb`
   (label set by `_helpers.tpl` in local chart — same convention as all other charts in this repo)
-- [ ] Verify PDB: `kubectl -n infra get pdb`
+  — confirmed 2026-07-10: both replicas `1/1 Running`, ArgoCD `Health Status: Healthy`, `Sync Status: Synced to HEAD (55a0bf8)`
+- [x] Verify PDB: `kubectl -n infra get pdb` — confirmed 2026-07-10: `spicedb` `MIN AVAILABLE 1`, `ALLOWED DISRUPTIONS 1`
 - [ ] Verify HTTP reachable from register namespace:
   ```bash
   kubectl -n register run -it --rm verify-spicedb --image=curlimages/curl --restart=Never -- \

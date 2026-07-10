@@ -32,9 +32,14 @@ spec:
 #                      Every pod gets a SPIFFE certificate; ztunnel verifies it.
 # - L7 (HTTP/JWT):     AuthorizationPolicy targeting the waypoint Gateway.
 #                      Enforced when a waypoint is deployed (production).
-# - L3 (cross-ns):     The per-namespace/per-pod NetworkPolicy rules below are
-#                      still meaningful for CROSS-NAMESPACE traffic (e.g. register
-#                      → postgres in infra namespace), where HBONE is not used.
+# - L3 (cross-ns):     Cross-namespace mesh traffic ALSO travels over HBONE
+#                      (verified via ztunnel access logs: register → spicedb.infra
+#                      egresses to the destination pod IP on port 15008, not 8080).
+#                      Cross-namespace egress rules below therefore allow BOTH the
+#                      app port (documentation of intent + non-mesh fallback) and
+#                      15008 (the wire protocol Cilium actually sees). Pod-identity
+#                      scoping still holds — ztunnel preserves the source pod IP
+#                      and dials the destination pod IP directly.
 #
 # The per-service rules (allow-ingress-irmin-from-register, etc.) are retained
 # as documentation of the intended access topology and will become enforceable
@@ -96,6 +101,10 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+        # HBONE wire port — what Cilium actually sees for ambient mesh traffic
+        # (see the L3 note in allow-hbone-intra-namespace above).
+        - protocol: TCP
+          port: 15008
 ---
 # Allow the register application to reach Keycloak in the infra namespace.
 apiVersion: networking.k8s.io/v1
@@ -122,6 +131,9 @@ spec:
         # Service port (80) never appears here — Keycloak listens on 8080.
         - protocol: TCP
           port: 8080
+        # HBONE wire port — see the L3 note in allow-hbone-intra-namespace above.
+        - protocol: TCP
+          port: 15008
 ---
 # Allow the register application to reach SpiceDB in the infra namespace.
 # SpiceDB is the fine-grained authorization store (ADR-INFRA-010).
@@ -149,6 +161,12 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+        # HBONE wire port — without this, ambient-mesh traffic to SpiceDB is
+        # dropped by default-deny and curl times out (ztunnel: "maybe a
+        # NetworkPolicy is blocking HBONE port 15008"). Found 2026-07-10 during
+        # the Step 1 smoke test. See the L3 note in allow-hbone-intra-namespace.
+        - protocol: TCP
+          port: 15008
 ---
 # Allow ingress to the register app from the Istio waypoint.
 # The waypoint is what terminates external traffic after the mesh policy checks.
