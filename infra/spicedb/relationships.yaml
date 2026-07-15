@@ -1,0 +1,60 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# K.6 authorization-graph intended state (AUTH-PLAN §K.6, IMPL-PLAN §K.6 Amendment)
+#
+# THIS FILE IS THE SOURCE OF TRUTH for team/org relationship tuples in SpiceDB.
+# Humans edit it by PR; scripts/spicedb-provision.sh reconciles the cluster to
+# it bidirectionally (missing tuples are written, orphaned tuples in SpiceDB
+# are privilege creep — logged at WARN and deleted; the run fails under
+# STRICT_DRIFT=true, the default). Keycloak stays authentication-only.
+#
+# Scope — the provisioning job manages ONLY these relations:
+#   organization: org_member
+#   team:         team_admin, editor, analyst, viewer
+#   workspace:    editor, analyst, viewer
+# It NEVER touches workspace owner_user / owner_team (app-lifecycle-written,
+# Wave 6) — those are invisible to both its read filter and its write set.
+#
+# Structure:
+#   users:          friendly-name → Keycloak subject UUID (the SpiceDB user id).
+#                   All role lists below refer to users by friendly name.
+#   organizations:  <org-id>:
+#                     members: [names]                → organization#org_member
+#                     teams:
+#                       <team-id>:
+#                         admins:   [names]           → team#team_admin
+#                         editors:  [names]           → team#editor
+#                         analysts: [names]           → team#analyst
+#                         viewers:  [names]           → team#viewer
+#   workspaces:     <workspace-id>:
+#                     editors:  [names]               → workspace#editor
+#                     analysts: [names]               → workspace#analyst
+#                     viewers:  [names]               → workspace#viewer
+#
+# Ids (org/team/workspace keys) become SpiceDB object ids: use [a-zA-Z0-9_-/]
+# only. Unknown keys or unknown user names fail the run (exit 2).
+#
+# Example (uncomment and adapt once the dev-realm personas exist —
+# TODO.md Step 2 §test-personas):
+#
+#   users:
+#     alice: "00000000-0000-0000-0000-00000000a11c"   # Keycloak sub
+#     bob:   "00000000-0000-0000-0000-000000000b0b"
+#
+#   organizations:
+#     risquanter:
+#       members: [alice, bob]
+#       teams:
+#         platform:
+#           admins:  [alice]
+#           editors: [bob]
+#
+#   workspaces:
+#     demo-workspace:
+#       viewers: [bob]
+# ──────────────────────────────────────────────────────────────────────────────
+
+users: {}
+
+organizations: {}
+
+workspaces: {}

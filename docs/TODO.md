@@ -301,9 +301,19 @@ secret before syncing the register app: `sops --decrypt infra/secrets/spicedb-re
 > These are independent of Wave 3 and can be done in parallel with Step 2.
 > Ref: AUTH-PLAN §K.6, AUTH-PHASES Phase 3, **IMPL-PLAN §K.6 Amendment (bidirectional reconcile)**.
 
-- [ ] K.6 authorization graph provisioning job — idempotent write of org/team→workspace
-  relationships sourced from a config file in git, with **full bidirectional reconcile**
-  (IMPL-PLAN §K.6 Amendment):
+- [x] K.6 authorization graph provisioning job — **implemented + verified live 2026-07-15**:
+  `scripts/spicedb-provision.sh` (env-driven core, reused verbatim by future CI) +
+  `scripts/spicedb-provision-local.sh` (dev launcher: temp port-forward + key from
+  cluster secret, never echoed) + `infra/spicedb/relationships.yaml` (git-authoritative
+  config, currently empty) + `tests/bats/spicedb-provisioning.bats` (11 tests, all green
+  live: flatten validation, idempotence, orphan WARN+delete+strict exit 1, B-K6-4 owner
+  survival). Semantics note: the job *always* reconciles (deletes orphans);
+  `STRICT_DRIFT=true` (default) additionally fails the run so a pipeline goes red.
+  Scope enforcement is structural: owner relations are inexpressible in the config
+  (unknown-key rejection) and invisible to the read filter. New dev prerequisite:
+  mikefarah `yq` ≥ 4 (YAML→JSON; checksum-verified install). Original spec:
+  idempotent write of org/team→workspace relationships sourced from a config file
+  in git, with **full bidirectional reconcile** (IMPL-PLAN §K.6 Amendment):
   - `to_write = intended − actual`; `to_delete = actual − intended` (orphans = privilege creep)
   - On drift: log each orphaned tuple at WARN with full detail; fail pipeline when
     `strict-drift = true` (default), warn-and-continue otherwise
@@ -365,7 +375,7 @@ secret before syncing the register app: `sops --decrypt infra/secrets/spicedb-re
 - [ ] BATS §L2 / §L2W: fine-grained read/write — requires `fine-grained` mode + Wave 3 deployed + schema applied + seed tuples (owner_user/viewer/tree — Step 2 §seed-relationships)
 - [ ] BATS §FC (B-FC-1–3): fail-closed behaviour — requires Wave 3 deployed; SpiceDB unavailable → **403, not 503** (block via NetworkPolicy or scale down during test); B-FC-3 additionally asserts the anonymous sentinel UUID `00000000-…-000000000000` has zero tuples
 - [ ] BATS §BOOT (B-BOOT-1–3): bootstrap ownership lifecycle — app-side blocker cleared: `BootstrapProvisionerSpiceDB` is implemented and wired in fine-grained mode (commit `1219827`), writing `owner_user`/`owner_team` tuples via `WriteRelationships`. Only remaining dependency is the image deploy (Step 2)
-- [ ] BATS §K6 (B-K6-1–4): drift detection — requires K.6 provisioning job + Wave 3 deployed; B-K6-4 asserts ownership tuples survive a provisioning run
+- [ ] BATS §K6 (B-K6-1–4): drift detection — requires K.6 provisioning job ✅ (landed 2026-07-15) + Wave 3 deployed; B-K6-4 asserts ownership tuples survive a provisioning run — infra-level equivalent already green (`spicedb-provisioning.bats` 2.4 writes an `owner_user` canary via the API and proves it survives + is invisible to the diff); re-verify against app-written tuples once Wave 3 bootstrap runs
 - [ ] All suites pass → authorization-complete gate for any non-dev environment (AUTH-TESTING-PLAN §Completion Criteria)
 
 > ⚠ **BATS passing ≠ L2 usable.** The suites above run via `kubectl port-forward`

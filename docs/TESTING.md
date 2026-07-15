@@ -42,6 +42,7 @@ The same tools work identically in CI containers.
 | kubectl | ≥ 1.28 | Cluster interaction (bats + Trivy k8s) | Pre-installed |
 | curl | any | HTTP probing (bats) | Pre-installed |
 | jq | ≥ 1.6 | JSON parsing | Pre-installed |
+| yq (mikefarah) | ≥ 4 | YAML→JSON in `scripts/spicedb-provision.sh` (K.6 job + its tests; Phase 4 runner image will need it too) | Single binary from GitHub releases |
 
 ### Tool Installation (Debian)
 
@@ -65,6 +66,15 @@ sudo install /tmp/conftest /usr/local/bin/conftest
 curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
   | sh -s -- -b /tmp/trivy-bin
 sudo install /tmp/trivy-bin/trivy /usr/local/bin/trivy
+
+# yq — mikefarah, static binary, checksum-verified (ADR-INFRA-012 T4:
+# dev-machine tool; re-review as T1 when it enters the Phase 4 runner image)
+YQ_VERSION=v4.44.3
+curl -L -o /tmp/yq \
+  "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+echo "a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7  /tmp/yq" \
+  | sha256sum -c
+sudo install /tmp/yq /usr/local/bin/yq
 ```
 
 ### Cluster Requirement
@@ -212,6 +222,7 @@ Trivy cannot programmatically verify these controls and marks them as
 | `health-probes.bats` | 12 | L0+hardening | Readiness, health endpoints, probe config, port isolation |
 | `pod-security.bats` | 15 | Hardening | automount, non-root, readOnlyFS, hostNS, LimitRange |
 | `spicedb.bats` | 10 | L2 | SpiceDB health/PDB, register wiring (secret + env), live mesh probe (HTTP gateway through HBONE), schema loaded, wrong-key rejection |
+| `spicedb-provisioning.bats` | 11 | L2 | K.6 reconcile job: config flatten validation (fail-closed), live idempotence, orphan WARN+delete+strict-drift exit, owner_user survival (B-K6-4), no credential leakage |
 
 #### Trivy Overlap
 
@@ -230,6 +241,7 @@ Some bats tests skip gracefully when prerequisites are missing:
 | Ingress unreachable | All HTTP-based tests | Configure ingress + port mapping |
 | No Keycloak token | Authenticated request tests (Groups 3, 5, 6) | Set `KEYCLOAK_TOKEN` or configure test user |
 | istioctl not found | ztunnel/proxy checks (3.4, 3.5 in mtls-enforcement) | Install istioctl |
+| No cluster reachable | spicedb-provisioning Group 2 (live reconcile) | Start k3d cluster |
 
 ---
 

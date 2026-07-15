@@ -28,92 +28,27 @@
 # Run:   bats tests/bats/spicedb.bats
 # ──────────────────────────────────────────────────────────────────────────────
 
-SPICEDB_URL="http://spicedb.infra.svc.cluster.local:8080"
+# Probe-pod mechanics (manifest, apply/collect/delete, log contract) live in
+# the shared helper: tests/bats/helpers/spicedb-probe.bash.
+load "helpers/spicedb-probe"
+
 PROBE_POD="bats-spicedb-probe"
 BADKEY_POD="bats-spicedb-badkey"
-
-# ── Probe pod lifecycle (once per file) ───────────────────────────────────────
-
-# Render the probe pod manifest. $1=pod name, $2=Authorization header value
-# expression (single-quoted through to the pod's shell).
-probe_pod_manifest() {
-    cat <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ${1}
-  namespace: register
-  labels:
-    # NetworkPolicies (allow-egress-spicedb / allow-ingress-spicedb-from-register)
-    # select source pods by this label — required, and makes the probe faithful
-    # to the real register app's network identity.
-    app.kubernetes.io/name: register
-spec:
-  restartPolicy: Never
-  containers:
-    - name: curl
-      image: curlimages/curl:latest
-      env:
-        - name: SPICEDB_KEY
-          valueFrom:
-            secretKeyRef:
-              name: spicedb-preshared-key-register
-              key: spicedb-preshared-key
-      command: ["/bin/sh", "-c"]
-      # First log line: HTTP status code. Remaining lines: response body.
-      args:
-        - >-
-          curl -sS -o /tmp/body -w '%{http_code}\n' --max-time 15
-          -X POST
-          -H "Authorization: Bearer ${2}"
-          -H "Content-Type: application/json"
-          -d '{}'
-          ${SPICEDB_URL}/v1/schema/read
-          && cat /tmp/body
-      securityContext:
-        # register namespace enforces PSS restricted.
-        runAsNonRoot: true
-        runAsUser: 100
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop: ["ALL"]
-        seccompProfile:
-          type: RuntimeDefault
-EOF
-}
-
-# Wait for a pod to reach Succeeded/Failed, then dump its logs to a file.
-# Returns 0 on Succeeded.
-collect_probe() {
-    local pod="$1" out="$2" phase="" i
-    for i in $(seq 1 30); do
-        phase=$(kubectl -n register get pod "$pod" \
-            -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-        case "$phase" in Succeeded|Failed) break ;; esac
-        sleep 2
-    done
-    kubectl -n register logs "$pod" > "$out" 2>/dev/null || true
-    echo "$phase" > "${out}.phase"
-    [ "$phase" = "Succeeded" ]
-}
 
 setup_file() {
     export PROBE_LOG="${BATS_FILE_TMPDIR}/probe.log"
     export BADKEY_LOG="${BATS_FILE_TMPDIR}/badkey.log"
 
-    kubectl -n register delete pod "$PROBE_POD" "$BADKEY_POD" \
-        --ignore-not-found --wait=true >/dev/null 2>&1 || true
+    # Apply both pods first so they start in parallel, then collect.
+    spicedb_probe_apply "$PROBE_POD" "/v1/schema/read" '{}'
+    spicedb_probe_apply "$BADKEY_POD" "/v1/schema/read" '{}' 'definitely-not-the-key'
 
-    probe_pod_manifest "$PROBE_POD" '${SPICEDB_KEY}' | kubectl apply -f - >/dev/null
-    probe_pod_manifest "$BADKEY_POD" 'definitely-not-the-key' | kubectl apply -f - >/dev/null
-
-    collect_probe "$PROBE_POD" "$PROBE_LOG" || true
-    collect_probe "$BADKEY_POD" "$BADKEY_LOG" || true
+    spicedb_probe_collect "$PROBE_POD" "$PROBE_LOG" || true
+    spicedb_probe_collect "$BADKEY_POD" "$BADKEY_LOG" || true
 }
 
 teardown_file() {
-    kubectl -n register delete pod "$PROBE_POD" "$BADKEY_POD" \
-        --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    spicedb_probe_delete "$PROBE_POD" "$BADKEY_POD"
 }
 
 probe_status() { head -n1 "$1" 2>/dev/null || echo ""; }
