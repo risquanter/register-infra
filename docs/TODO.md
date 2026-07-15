@@ -314,12 +314,22 @@ secret before syncing the register app: `sops --decrypt infra/secrets/spicedb-re
   Terraform CI (unrelated); the register app repo has no CI at all; a GitHub-hosted runner has
   no network path to a local k3d cluster regardless. So "wire to CI" is not a dependency gap —
   it correctly comes after the Phase 4 ARC self-hosted runner exists, not before.*
-  - [ ] **Design session (guided)**: walk through, interactively, before implementing —
-    the config file schema for "intended state" (org→team→workspace assignments), the
-    implementation approach (bash+`zed` CLI vs. a small Go/Python tool), where org/team
-    membership data originates from, and how the job gets invoked locally pre-CI. Options,
-    engineering trade-offs, and best practices to be presented for a joint decision, not
-    picked unilaterally by the agent.
+  - [x] **Design session (guided)** — held 2026-07-15, decisions:
+    1. **Tooling: bash + curl + jq** against the HTTP gateway (`/v1/relationships/read` +
+       `/v1/relationships/write`) — the channel already proven by the schema write and the
+       BATS probe; no `zed`/gRPC dependency. Follow-up recorded: this opens simplifying the
+       Phase 4 runner path (ADR-INFRA-011 §3) to HTTP-only, potentially retiring :50051.
+    2. **Config: hierarchical YAML in register-infra** (`infra/spicedb/relationships.yaml`):
+       orgs → members / teams (admins, members) → workspace grants, plus a `users:`
+       name→Keycloak-sub map; the job flattens it to tuples before diffing.
+    3. **Source of truth: the git file is authoritative**; humans edit by PR, orphaned
+       tuples in SpiceDB are drift. Keycloak stays authentication-only.
+    4. **Invocation: one environment-driven core script, reused verbatim by CI later.**
+       The script takes only `SPICEDB_URL` + key (env); a thin local launcher provides
+       them for dev (temporary port-forward + key read from the cluster secret, never
+       echoed) and the Phase 4 in-cluster runner provides them natively (Service DNS +
+       mounted secret) and runs the identical script. CI-parity lives at the script
+       level, not the execution level.
 - [x] K.6 app service-account write scoping — **decision made 2026-07-06: defer (Option A)**.
   SpiceDB (OSS) has no mechanism to scope a preshared key to specific relations — the
   `owner_user`/`owner_team`-only write restriction in IMPL-PLAN's L2.0 exit criterion is
@@ -426,8 +436,8 @@ secret before syncing the register app: `sops --decrypt infra/secrets/spicedb-re
     recover instead of crash-looping while mesh-policy/irmin converge. If the crash-loop is
     gone but takes noticeably long, or if it still crash-loops (budget too short), tune
     `IRMIN_HEALTHCHECK_BUDGET` accordingly and record the observed reconcile time here.
-- [ ] Automated SpiceDB bats test (regression coverage for HTTP reachability + schema load) — can land after Step 1
-- [ ] Retire the last PERMISSIVE exception — switch SpiceDB's kubelet health probe from gRPC (:50051) to HTTP on the gateway (:8080), then delete `spicedb-grpc-probe-permissive` from `peer-authentication.yaml`. SpiceDB is accessed over HTTP REST here (no gRPC calls, ADR-INFRA-010), so the gRPC probe — and its PERMISSIVE exception — are avoidable. Every other service is already STRICT + CiliumNP-only (ADR-INFRA-004 §4)
+- [x] Automated SpiceDB bats test (regression coverage for HTTP reachability + schema load) — landed 2026-07-15 as `tests/bats/spicedb.bats` (10 tests, all green on first run): structural health (pods/PDB/Service ports), register-side wiring (secret + `SPICEDB_URL`/`SPICEDB_TOKEN` env), live mesh probe from a register-labeled restricted-PSS pod (POST `/v1/schema/read`, key via `secretKeyRef` — never materialized in the runner), schema read-back (all 5 definitions), and wrong-key rejection (401/403). Picked up automatically by `run-regression.sh` Phase 4.
+- [x] Retire the last PERMISSIVE exception — done 2026-07-15: SpiceDB kubelet probes switched to `httpGet /healthz` on the gateway :8080 (endpoint verified live: `200 {"status":"SERVING"}`, unauthenticated), `spicedb-grpc-probe-permissive` deleted from `peer-authentication.yaml`, CiliumNP renamed `allow-ingress-spicedb-grpc-healthcheck` → `allow-ingress-spicedb-healthcheck` (port 50051 → 8080), `network-isolation.bats` 4.7/4.8 updated in lockstep. **No port-level PERMISSIVE exception remains.** Both apps auto-sync with `prune: true`, so the old PA and CiliumNP are removed automatically. Ideal order is spicedb (new HTTP probes, which also work while PERMISSIVE still exists) before mesh-policy (PA deletion); if mesh-policy happens to sync first, old pods' plaintext gRPC probes fail under STRICT for the short window until the spicedb rollout replaces them — transient, and harmless while the app is still capability-only.
 - [ ] Promote PeerAuthentication to mesh-wide STRICT in `istio-system` (currently per-namespace)
 - [ ] ResourceQuota per namespace (complement LimitRange with hard caps on CPU/memory/pod count)
 - [ ] PSS: upgrade `infra` namespace from baseline enforce → restricted enforce
@@ -619,7 +629,69 @@ for hardening register-server against compromise in the first place.
 
 ## Deferred — Blocked on App-Side Changes
 
-- [ ] `infra/secrets/register-db.enc.yaml` — **UNBLOCKED 2026-07-05**: `WorkspaceStorePostgres.scala` exists and `workspaceStore.backend = "postgres"` is an accepted config value (`REGISTER_WORKSPACE_STORE_BACKEND`); Flyway + `REGISTER_DB_USER`/`REGISTER_DB_PASSWORD`/`REGISTER_DB_NAME` env hooks are in `application.conf`. Create the secret + Helm values when switching the backend (ADR-INFRA-006)
+- [ ] **Wire the PostgreSQL-backed workspace store into the register chart** (workspace-metadata persistence) — **UNBLOCKED 2026-07-05**, **still open 2026-07-12**.
+
+  **Why it matters / what's wrong today.** The register Helm chart
+  (`infra/helm/register/values.yaml`) sets `REGISTER_REPOSITORY_TYPE=irmin`, so
+  *risk trees* persist to Irmin — but it leaves the *workspace store* on its
+  in-memory default (`TrieMap`). The chart's own comment (the `env:` preamble)
+  says as much: "in-memory for workspace metadata (TrieMap). When
+  WorkspaceStorePostgres is implemented … add DB_* env vars here." Result on the
+  cluster: a pod restart (rollout, node drain, OOM) silently drops every
+  workspace even though its trees survive in Irmin — the capability URL points
+  at a workspace that no longer exists. This is the **K8s twin of register-repo
+  `docs/dev/TODO.md` item 10**, which was fixed for docker-compose on 2026-07-12
+  (`.env.irmin` now sets `REGISTER_WORKSPACE_STORE_BACKEND=postgres`). The two
+  deployment paths are independent; the compose fix does nothing for the cluster.
+
+  **App side is ready (verified in register repo 2026-07-12):**
+  - `WorkspaceStorePostgres.scala` exists; `workspaceStore.backend` accepts
+    `"postgres"` via `REGISTER_WORKSPACE_STORE_BACKEND`.
+  - Connection config reads `REGISTER_DB_HOST` / `REGISTER_DB_PORT` /
+    `REGISTER_DB_NAME` / `REGISTER_DB_USER` / `REGISTER_DB_PASSWORD` and
+    `REGISTER_FLYWAY_URL` (all `${?ENV}` hooks in `application.conf`).
+  - **Flyway migrates the schema on server startup** — no separate migration
+    Job needed, but the DB/role must exist and be reachable before/at boot, and
+    the register app must have DDL on its own schema (ADR-INFRA-006 least-privilege).
+  - Optional but recommended alongside: set `REGISTER_WORKSPACE_TTL` /
+    `REGISTER_WORKSPACE_IDLE_TIMEOUT` (HOCON durations; `0` disables the reaper)
+    so cluster workspaces aren't reaped on the 72h/1h defaults.
+
+  **Steps (per ADR-INFRA-006 — SOPS secret per namespace, dedicated `register_app`
+  role, NOT the shared `postgres` superuser):**
+  1. **Provision the database + role.** The `postgresql` ArgoCD app currently
+     provisions only the Keycloak DB. Add a `register` database and a
+     `register_app` role with `GRANT` on its own schema (initdb/extra-scripts on
+     the Bitnami chart, or a bootstrap Job). Superuser/keycloak creds stay in the
+     `infra`-namespace `postgres-credentials` Secret — do not reuse them.
+  2. **Create the two SOPS files** ADR-INFRA-006 prescribes: the initdb password
+     fragment in `infra`, and `infra/secrets/register-db.enc.yaml` holding the
+     app credential as a Secret in the `register` namespace (pattern: existing
+     `spicedb-register.enc.yaml`; applied manually with `sops --decrypt | kubectl
+     apply -f -` like the other SOPS secrets, BEFORE the register chart syncs).
+  3. **Add DB env to `infra/helm/register/values.yaml`** `env:` block:
+     `REGISTER_WORKSPACE_STORE_BACKEND=postgres`, `REGISTER_DB_HOST`
+     (`postgresql.infra.svc.cluster.local`), `REGISTER_DB_PORT`, `REGISTER_DB_NAME`,
+     `REGISTER_FLYWAY_URL`, and `REGISTER_DB_USER`/`REGISTER_DB_PASSWORD` via
+     `valueFrom.secretKeyRef` → `register-db-credentials` (same shape as the
+     existing `SPICEDB_TOKEN` secretKeyRef). Remove/replace the stale "in-memory
+     for workspace metadata" comment.
+  4. **Startup ordering / mesh.** register and irmin are ArgoCD wave 4; postgres
+     lives in `infra`. Confirm the register→postgres dependency tolerates the
+     ambient-mesh programming lag the same way the register→irmin readiness gate
+     does (ADR-031, `IRMIN_HEALTHCHECK_BUDGET`) — Flyway-at-boot will fail the pod
+     into CrashLoopBackOff until Postgres + `NetworkPolicy`/`AuthorizationPolicy`
+     for register→postgresql are programmed. May need a register→postgresql
+     `AuthorizationPolicy`/`NetworkPolicy` allow rule (check `infra/k8s/network-policy`
+     + istio policy) and possibly a DB readiness budget.
+  5. **Verify:** roll the register pod; create a workspace via its capability URL;
+     `kubectl delete pod` the register pod; confirm the workspace still resolves
+     after the new pod is Ready. Add a BATS assertion under `tests/bats/` if the
+     live-cluster suite covers workspace lifecycle.
+
+  Update ADR-INFRA-006's "does not exist yet / in-memory storage" implementation
+  note once landed. See register `docs/dev/TODO.md` item 5 (the app-side
+  `WorkspaceStorePostgres` interval-encoding follow-up) for related detail.
 - [ ] Chainsaw test framework — deferred; OPA unit tests + bats + conftest cover the same assertions (ADR-INFRA-005)
 - [ ] CI workflows (`.github/workflows/ci.yaml`, `regression.yaml`) — create when GitHub Actions CI is set up (ADR-INFRA-005)
 

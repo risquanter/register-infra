@@ -211,6 +211,7 @@ Trivy cannot programmatically verify these controls and marks them as
 | `opa-authz.bats` | 19 | L2 | OPA infra, public routes, auth/unauth, viewer deny, admin gate |
 | `health-probes.bats` | 12 | L0+hardening | Readiness, health endpoints, probe config, port isolation |
 | `pod-security.bats` | 15 | Hardening | automount, non-root, readOnlyFS, hostNS, LimitRange |
+| `spicedb.bats` | 10 | L2 | SpiceDB health/PDB, register wiring (secret + env), live mesh probe (HTTP gateway through HBONE), schema loaded, wrong-key rejection |
 
 #### Trivy Overlap
 
@@ -383,14 +384,18 @@ curl -si -X POST -H "Authorization: Bearer $TOKEN" \
 # Expected: HTTP/1.1 403 Forbidden
 ```
 
-### Layer 2 — SpiceDB Instance Authorization (future)
+### Layer 2 — SpiceDB Instance Authorization (deployed, not yet enforced)
 
 Layer 2 adds per-resource permission checks via SpiceDB. The application
 calls `SpiceDB.check(userId, permission, resourceRef)` after OPA allows
 the request. Both must allow — neither can unilaterally grant access.
 
-Not yet implemented. See [ADR-INFRA-010](adr/ADR-INFRA-010.md) (SpiceDB
-runtime) and TODO.md Phase 1–2.
+Infrastructure status: SpiceDB runs in the `infra` namespace (ArgoCD app
+`spicedb`) with the authorization schema loaded, and the register chart
+injects `SPICEDB_URL`/`SPICEDB_TOKEN`. Enforcement is not active yet —
+`REGISTER_AUTH_MODE` is still `capability-only`, so the app never consults
+SpiceDB. See [ADR-INFRA-010](adr/ADR-INFRA-010.md) (SpiceDB runtime) and
+TODO.md L2 Path Step 2 §auth-mode-switch for the remaining rollout steps.
 
 ```bash
 # Future: editor with SpiceDB relationship can access specific resource.

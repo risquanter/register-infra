@@ -124,12 +124,13 @@ namespaces) — enumerated lists in prose drift; the rules themselves do not.
 Exceptions that need no rule: services probed by `exec` on `127.0.0.1` (e.g.
 PostgreSQL's `pg_isready`), which never touch the network.
 
-> **Temporary exception — SpiceDB gRPC probe (50051).** SpiceDB still carries a
-> PERMISSIVE exception for its gRPC health probe. It is not yet deployed, and the
-> intended resolution is *not* to verify gRPC-under-STRICT but to switch its health
-> probe to the HTTP gRPC-gateway: SpiceDB is accessed over **HTTP REST** in this
-> architecture (ADR-INFRA-010), not gRPC, so an HTTP probe removes both the gRPC
-> probe and the exception, bringing SpiceDB in line with the rule above.
+> **Retired exception — SpiceDB gRPC probe (50051).** SpiceDB briefly carried a
+> PERMISSIVE exception for a gRPC health probe. Resolved 2026-07-15 as intended:
+> the probe was switched to `GET /healthz` on the HTTP gRPC-gateway (:8080) —
+> SpiceDB is accessed over **HTTP REST** in this architecture (ADR-INFRA-010),
+> not gRPC — and `spicedb-grpc-probe-permissive` was deleted. SpiceDB now follows
+> the rule above (`allow-ingress-spicedb-healthcheck`); **no port-level PERMISSIVE
+> exception remains in any security namespace.**
 
 **Checklist — enrolling a new service in the mesh.** The probe rules are
 hand-written per service; forgetting one presents as liveness-probe i/o timeouts
@@ -298,7 +299,7 @@ spec:
 |----------|---------|
 | `infra/k8s/network-policy/register.yaml` | Default-deny + HBONE allow + per-service rules (topology docs) + DNS egress |
 | `infra/k8s/network-policy/infra.yaml` | Default-deny + allow rules + DNS egress for infra ns |
-| `infra/k8s/istio/peer-authentication.yaml` | STRICT mTLS for register, argocd, and infra namespaces. Health probe ports stay STRICT — kubelet probes pass via ztunnel + a `169.254.7.127/32` CiliumNetworkPolicy (no PERMISSIVE; SpiceDB gRPC 50051 is a temporary exception) |
+| `infra/k8s/istio/peer-authentication.yaml` | STRICT mTLS for register, argocd, and infra namespaces. Health probe ports stay STRICT — kubelet probes pass via ztunnel + a `169.254.7.127/32` CiliumNetworkPolicy (no PERMISSIVE exceptions) |
 | `infra/k8s/istio/authorization-policy.yaml` | AuthorizationPolicy with `targetRef` → waypoint Gateway |
 | waypoint (register ns) | Deployed imperatively via `istioctl waypoint apply -n register --enroll-namespace` (Istio runtime object, not a committed manifest) |
 

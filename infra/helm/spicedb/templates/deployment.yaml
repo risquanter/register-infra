@@ -101,20 +101,25 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 
-          # gRPC health probe on port 50051.
-          # PeerAuthentication portLevelMtls PERMISSIVE for port 50051 on
-          # SpiceDB pods allows kubelet's plaintext gRPC health probe through.
-          # Access to port 50051 in plaintext is restricted to 169.254.7.127/32
-          # (ztunnel SNAT) by CiliumNetworkPolicy (infra.yaml).
+          # HTTP health probe on the gRPC-gateway port (8080): GET /healthz
+          # returns 200 {"status":"SERVING"} without authentication (verified
+          # live 2026-07-15). Deliberately NOT the gRPC probe on 50051 — that
+          # required a port-level PERMISSIVE mTLS exception, the last one in
+          # the mesh. The HTTP probe passes under STRICT via ztunnel + the
+          # allow-ingress-spicedb-healthcheck CiliumNetworkPolicy
+          # (169.254.7.127/32 ztunnel SNAT — same pattern as every other
+          # service, ADR-INFRA-004 §4).
           livenessProbe:
-            grpc:
-              port: {{ .Values.service.grpcPort }}
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.httpPort }}
             initialDelaySeconds: 10
             periodSeconds: 30
             failureThreshold: 3
           readinessProbe:
-            grpc:
-              port: {{ .Values.service.grpcPort }}
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.httpPort }}
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3

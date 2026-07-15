@@ -32,7 +32,7 @@ credentials:
 # SpiceDB service configuration.
 service:
   httpPort: 8080    # gRPC-gateway REST API (app AuthorizationServiceSpiceDB)
-  grpcPort: 50051   # native gRPC (zed CLI health probe + Phase 4 ARC runner)
+  grpcPort: 50051   # native gRPC (Phase 4 ARC runner / zed CLI; kubelet probes use HTTP :8080 /healthz)
 
 # Resource requests and limits.
 # SpiceDB is CPU-bound (CEL evaluation). Memory scales with schema complexity.

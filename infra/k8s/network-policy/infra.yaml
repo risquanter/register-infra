@@ -322,24 +322,20 @@ spec:
         - protocol: TCP
           port: 5432
 ---
-# Allow kubelet health probes to reach SpiceDB on the gRPC port (50051).
+# Allow kubelet health probes to reach SpiceDB on the HTTP gateway port (8080).
 #
-# SpiceDB uses gRPC health probes. In Istio ambient mode, ztunnel SNATs kubelet
-# probe traffic to 169.254.7.127. PeerAuthentication STRICT is overridden for
-# port 50051 on SpiceDB pods via spicedb-grpc-probe-permissive (peer-authentication.yaml).
-# This CiliumNetworkPolicy restricts who may send plaintext to port 50051:
-# only the ztunnel SNAT address (= kubelet probe). All other 50051 traffic
-# must come from the runner namespace (Phase 4, stub below) and travels via HBONE.
-#
-# Defense-in-depth layers on port 50051:
-#   1. ztunnel SNAT: only local kubelet probes rewritten to 169.254.7.127
-#   2. CiliumNetworkPolicy: only 169.254.7.127 may reach 50051 in plaintext
-#   3. PeerAuthentication PERMISSIVE on port 50051 (spicedb pods only)
-#   4. No Service exposes 50051 externally
+# The kubelet probes GET /healthz on the gRPC-gateway (switched from the gRPC
+# :50051 probe 2026-07-15 — that probe needed the mesh's last port-level
+# PERMISSIVE exception; the HTTP probe passes under full STRICT). In Istio
+# ambient mode, ztunnel SNATs kubelet probe traffic to 169.254.7.127; this
+# CiliumNetworkPolicy admits exactly that source to port 8080 — the same
+# pattern as every other service (ADR-INFRA-004 §4). App traffic
+# (register → spicedb:8080) is unaffected: it arrives via HBONE under its
+# own allow rules; this policy is additive.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: allow-ingress-spicedb-grpc-healthcheck
+  name: allow-ingress-spicedb-healthcheck
   namespace: infra
 spec:
   endpointSelector:
@@ -350,7 +346,7 @@ spec:
         - 169.254.7.127/32
       toPorts:
         - ports:
-            - port: "50051"
+            - port: "8080"
               protocol: TCP
 # ── Phase 4 stub: runner → spicedb:50051 (gRPC — zed CLI schema write) ────────
 # Uncomment when the runner namespace is deployed (ADR-INFRA-011, TODO Phase 4).

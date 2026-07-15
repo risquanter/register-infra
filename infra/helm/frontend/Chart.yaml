@@ -5,4 +5,4 @@ description: nginx SPA frontend for the register application.
   URL path (ADR-021). See ADR-INFRA-007 for the full serving architecture.
 type: application
 version: 0.1.0
-appVersion: "dev"
+appVersion: "0.3.0"  # informational only; actual image tag is in values.yaml

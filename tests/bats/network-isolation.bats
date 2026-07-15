@@ -182,14 +182,14 @@ pod_ip() {
     [ "$cidr" = "169.254.7.127/32" ]
 }
 
-@test "4.7 CiliumNetworkPolicy for SpiceDB gRPC healthcheck exists" {
-    kubectl -n infra get ciliumnetworkpolicy allow-ingress-spicedb-grpc-healthcheck \
+@test "4.7 CiliumNetworkPolicy for SpiceDB healthcheck exists (HTTP :8080)" {
+    kubectl -n infra get ciliumnetworkpolicy allow-ingress-spicedb-healthcheck \
         -o name >/dev/null 2>&1
 }
 
 @test "4.8 SpiceDB healthcheck CIDR restricted to ztunnel SNAT address" {
     local cidr
-    cidr=$(kubectl -n infra get ciliumnetworkpolicy allow-ingress-spicedb-grpc-healthcheck \
+    cidr=$(kubectl -n infra get ciliumnetworkpolicy allow-ingress-spicedb-healthcheck \
         -o jsonpath='{.spec.ingress[0].fromCIDR[0]}' 2>/dev/null || echo "")
     [ "$cidr" = "169.254.7.127/32" ]
 }

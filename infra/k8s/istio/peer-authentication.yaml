@@ -56,33 +56,10 @@ spec:
 # unauthenticated traffic from any workload that can reach the port.
 # Full mechanism: ADR-INFRA-004 §4 (canonical — not restated here).
 ---
-# SpiceDB gRPC port — allow plaintext kubelet health probes on port 50051.
-#
-# PENDING: this is the last remaining PERMISSIVE exception, and it should not exist.
-# SpiceDB is accessed over HTTP REST (gRPC-gateway :8080) in this architecture, not
-# gRPC (ADR-INFRA-010) — we make no gRPC calls. The fix is to switch SpiceDB's
-# health probe from gRPC (:50051) to HTTP on the gateway, which removes the gRPC
-# probe and this exception together, bringing SpiceDB in line with the CiliumNP-only
-# approach used for every other service. Blocked only because SpiceDB is not yet
-# deployed (no secret). See ADR-INFRA-004 §4.
-#
-# SpiceDB serves gRPC health probes (grpc.health.v1.Health/Check) on port 50051.
-# Kubelet gRPC probes arrive via ztunnel SNAT (169.254.7.127) as plaintext.
-# PERMISSIVE on port 50051 allows the probe while all other inbound traffic
-# to SpiceDB must present a valid mesh certificate (STRICT namespace default).
-#
-# Port 8080 (HTTP gRPC-gateway REST, app client) remains STRICT.
-# Port 50051 plaintext access is further restricted to 169.254.7.127/32
-# by CiliumNetworkPolicy allow-ingress-spicedb-grpc-healthcheck.
-apiVersion: security.istio.io/v1
-kind: PeerAuthentication
-metadata:
-  name: spicedb-grpc-probe-permissive
-  namespace: infra
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: spicedb
-  portLevelMtls:
-    50051:
-      mode: PERMISSIVE
+# SpiceDB needs no exception either (since 2026-07-15): its kubelet probe is
+# HTTP GET /healthz on the gateway port 8080, covered by the
+# allow-ingress-spicedb-healthcheck CiliumNetworkPolicy like every other
+# service. The former spicedb-grpc-probe-permissive override (gRPC probe on
+# :50051) was the mesh's last PERMISSIVE exception in a security namespace —
+# retired together with the gRPC probe. SpiceDB is consumed over HTTP REST
+# only (ADR-INFRA-010); gRPC :50051 stays STRICT with no plaintext path.

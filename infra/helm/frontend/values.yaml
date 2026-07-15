@@ -1,12 +1,14 @@
-# Frontend image — built from risquanter/register repository:
-#   docker build -f containers/prod/Dockerfile.frontend-prod -t local/frontend:dev .
+# Frontend image — built from risquanter/register repository via compose
+# (the service is profile-gated; build context is the PARENT dir — sibling
+# repos hdr-rng/vague-quantifier-logic are copied in, see register TODO §5b):
+#   docker compose --profile frontend build frontend   # → local/frontend:<APP_VERSION>
 #
-# Local dev: import into k3d with:
-#   k3d image import local/frontend:dev -c register-dev
+# Local dev deploy: import + bump this tag (see docs/LOCAL-IMAGE-DEPLOY.md):
+#   k3d image import local/frontend:<version> -c register-dev
 # Production: push to GHCR and let Image Updater manage the tag.
 image:
   repository: local/frontend
-  tag: "dev"
+  tag: "0.3.0"
   pullPolicy: Never
 
 # Single replica is sufficient. The frontend is stateless (all state is in

@@ -50,7 +50,7 @@
 ║  │  │                                       │                      │ ║
 ║  │  │  Layer 0: workspace key in URL        │                      │ ║
 ║  │  │  Layer 1: + valid x-user-id (JWT)     │                      │ ║
-║  │  │  Layer 2: + SpiceDB relationship      │ (future)             │ ║
+║  │  │  Layer 2: + SpiceDB relationship      │ (deployed, inactive) │ ║
 ║  │  └──────────┬────────────────────────────┘                      │ ║
 ║  │             │ only egress allowed by NetworkPolicy [Cilium]     │ ║
 ║  └─────────────┼───────────────────────────────────────────────────┘ ║
@@ -152,7 +152,8 @@
                      (no JWT required) and OPA (no role check).
                      Layer 1: key is an invitation token; x-user-id (from ①–③) also required.
 
-⑤ INSTANCE AUTHZ →  SpiceDB (app layer — future Layer 2)
+⑤ INSTANCE AUTHZ →  SpiceDB (app layer — Layer 2: deployed + schema loaded,
+                     not yet consulted while REGISTER_AUTH_MODE=capability-only)
                      Application calls SpiceDB.check(userId, permission, resourceRef).
                      Questions answered:
                        - Is this specific user a member of this specific workspace?
