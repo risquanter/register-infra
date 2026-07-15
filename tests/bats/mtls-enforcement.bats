@@ -18,13 +18,16 @@ setup() {
     # Namespaces that MUST have STRICT mTLS.
     SECURE_NAMESPACES=(register argocd infra)
 
-    # Expected PERMISSIVE port overrides — mapping of "namespace/name/port" → mode.
-    # Any PERMISSIVE port NOT in this list is a failure.
-    EXPECTED_PERMISSIVE=(
-        "register/opa-diag-permissive/8282"
-        "register/register-probe-permissive/8091"
-        "register/frontend-probe-permissive/8080"
-        "infra/keycloak-mgmt-permissive/9000"
+    # All port-level PERMISSIVE probe exceptions were retired (ADR-INFRA-004 §4):
+    # kubelet probes are plain HTTP allowed by per-port CiliumNetworkPolicies
+    # (fromCIDR 169.254.7.127/32), so PERMISSIVE overrides must not exist at all.
+    # The last one (SpiceDB gRPC :50051) was retired 2026-07-15.
+    RETIRED_PERMISSIVE_PAS=(
+        "register/opa-diag-permissive"
+        "register/register-probe-permissive"
+        "register/frontend-probe-permissive"
+        "infra/keycloak-mgmt-permissive"
+        "infra/spicedb-grpc-probe-permissive"
     )
 }
 
@@ -72,14 +75,14 @@ setup() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  GROUP 2: Port-level PERMISSIVE — only on expected health probe ports
+#  GROUP 2: No port-level PERMISSIVE exceptions anywhere
 # ══════════════════════════════════════════════════════════════════════════════
 
-@test "2.1 PERMISSIVE overrides exist only on known health probe ports" {
-    local unexpected=""
+@test "2.1 no PERMISSIVE override exists in any security namespace" {
+    local permissive=""
     for ns in register argocd infra; do
-        local permissive_entries
-        permissive_entries=$(kubectl -n "$ns" get peerauthentication -o json 2>/dev/null | \
+        local entries
+        entries=$(kubectl -n "$ns" get peerauthentication -o json 2>/dev/null | \
             jq -r '
                 .items[] |
                 . as $pa |
@@ -87,46 +90,26 @@ setup() {
                  select(.value.mode == "PERMISSIVE") |
                  "\($pa.metadata.namespace)/\($pa.metadata.name)/\(.key)")
             ' 2>/dev/null || echo "")
-
-        while IFS= read -r entry; do
-            [ -z "$entry" ] && continue
-            local found=false
-            for expected in "${EXPECTED_PERMISSIVE[@]}"; do
-                if [ "$entry" = "$expected" ]; then
-                    found=true
-                    break
-                fi
-            done
-            if [ "$found" = "false" ]; then
-                unexpected="${unexpected}${entry} "
-            fi
-        done <<< "$permissive_entries"
+        [ -n "$entries" ] && permissive="${permissive}${entries} "
     done
-    if [ -n "$unexpected" ]; then
-        echo "Unexpected PERMISSIVE ports: ${unexpected}" >&2
+    if [ -n "$permissive" ]; then
+        echo "PERMISSIVE ports found (none are allowed): ${permissive}" >&2
         false
     fi
 }
 
-@test "2.2 OPA diag port 8282 override targets OPA pods only" {
-    local selector
-    selector=$(kubectl -n register get peerauthentication opa-diag-permissive \
-        -o jsonpath='{.spec.selector.matchLabels.app\.kubernetes\.io/name}' 2>/dev/null || echo "")
-    [ "$selector" = "opa" ]
-}
-
-@test "2.3 register health port 8091 override targets register pods only" {
-    local selector
-    selector=$(kubectl -n register get peerauthentication register-probe-permissive \
-        -o jsonpath='{.spec.selector.matchLabels.app\.kubernetes\.io/name}' 2>/dev/null || echo "")
-    [ "$selector" = "register" ]
-}
-
-@test "2.4 keycloak mgmt port 9000 override targets keycloak pods only" {
-    local selector
-    selector=$(kubectl -n infra get peerauthentication keycloak-mgmt-permissive \
-        -o jsonpath='{.spec.selector.matchLabels.app\.kubernetes\.io/name}' 2>/dev/null || echo "")
-    [ "$selector" = "keycloak" ]
+@test "2.2 retired probe-exception PeerAuthentications stay retired" {
+    local resurrected=""
+    for entry in "${RETIRED_PERMISSIVE_PAS[@]}"; do
+        local ns="${entry%%/*}" name="${entry#*/}"
+        if kubectl -n "$ns" get peerauthentication "$name" >/dev/null 2>&1; then
+            resurrected="${resurrected}${entry} "
+        fi
+    done
+    if [ -n "$resurrected" ]; then
+        echo "Retired PeerAuthentication reappeared: ${resurrected}" >&2
+        false
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -155,12 +138,28 @@ setup() {
     [ "$label" = "ambient" ]
 }
 
-@test "3.4 all register pods have ztunnel-assigned identity (SPIFFE)" {
-    # In ambient mode, ztunnel assigns SPIFFE identities to all pods.
-    # Verify via istioctl proxy-status that workloads are SYNCED.
+@test "3.4 all register app pods are captured by ztunnel (HBONE)" {
+    # In ambient mode, ztunnel captures enrolled pods and tunnels their traffic
+    # over HBONE with a SPIFFE identity. Every register-namespace pod must show
+    # protocol HBONE in ztunnel's workload table — except the ingress gateway,
+    # which is a full Envoy proxy with its own mesh identity (checked in 3.5).
     command -v istioctl >/dev/null 2>&1 || skip "istioctl not available"
-    local unsynced
-    unsynced=$(istioctl proxy-status 2>/dev/null | \
-        grep "register" | grep -v "SYNCED" | wc -l || echo "999")
-    [ "$unsynced" -eq 0 ]
+    local not_hbone
+    not_hbone=$(istioctl ztunnel-config workload -o json 2>/dev/null | \
+        jq -r '.[] | select(.namespace == "register"
+                            and .workloadType == "pod"
+                            and .workloadName != "register-ingress-istio"
+                            and .protocol != "HBONE") | .name' || echo "jq-failed")
+    if [ -n "$not_hbone" ]; then
+        echo "register pods not captured as HBONE: ${not_hbone}" >&2
+        false
+    fi
+}
+
+@test "3.5 ingress gateway Envoy proxy is connected to istiod" {
+    # The register ingress gateway is a full Envoy proxy (not ztunnel-captured);
+    # its mesh identity comes from istiod directly. Verify it appears in
+    # proxy-status, i.e. it holds a live xDS connection.
+    command -v istioctl >/dev/null 2>&1 || skip "istioctl not available"
+    istioctl proxy-status 2>/dev/null | grep -q "register-ingress-istio.*\.register"
 }

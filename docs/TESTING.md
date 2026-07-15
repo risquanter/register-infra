@@ -206,7 +206,7 @@ Trivy cannot programmatically verify these controls and marks them as
 | Suite | Tests | Layer | Key Checks |
 |-------|:-----:|-------|------------|
 | `header-security.bats` | 17 | L1+L2 | Envoy filter chain, JWT accept/reject, header stripping, C1 guard |
-| `mtls-enforcement.bats` | 14 | L0 | PeerAuth STRICT, SPIFFE enrollment, PERMISSIVE exceptions |
+| `mtls-enforcement.bats` | 11 | L0 | PeerAuth STRICT, ztunnel HBONE capture, zero PERMISSIVE exceptions (all retired) |
 | `network-isolation.bats` | 23 | L0 | Default-deny, HBONE, per-service, CiliumNP, negative tests |
 | `opa-authz.bats` | 19 | L2 | OPA infra, public routes, auth/unauth, viewer deny, admin gate |
 | `health-probes.bats` | 12 | L0+hardening | Readiness, health endpoints, probe config, port isolation |
@@ -229,7 +229,7 @@ Some bats tests skip gracefully when prerequisites are missing:
 | No waypoint deployed | header-security Groups 1–3, opa-authz Groups 3–6 | Deploy waypoint (LOCAL-K3D-BOOTSTRAP §9–11) |
 | Ingress unreachable | All HTTP-based tests | Configure ingress + port mapping |
 | No Keycloak token | Authenticated request tests (Groups 3, 5, 6) | Set `KEYCLOAK_TOKEN` or configure test user |
-| istioctl not found | SPIFFE sync check (3.4 in mtls-enforcement) | Install istioctl |
+| istioctl not found | ztunnel/proxy checks (3.4, 3.5 in mtls-enforcement) | Install istioctl |
 
 ---
 
