@@ -5,8 +5,6 @@ in the local k3d cluster (`register-dev`). No registry involved: the Helm charts
 use `pullPolicy: Never`, so the kubelet only ever uses images already present in
 the k3d node's containerd store — put there by `k3d image import`.
 
-First executed 2026-07-10 (register-server + frontend 0.3.0).
-
 ## Version contract
 
 | Where | Role |
@@ -43,9 +41,13 @@ k3d image import local/register-server:$V local/frontend:$V -c register-dev
 # verify:
 docker exec k3d-register-dev-server-0 crictl images | grep -E "register-server|frontend"
 
-# 3. register-infra/ — bump image.tag (+ Chart.yaml appVersion) and push
-#    infra/helm/register/values.yaml  → image.tag: "$V"
-#    infra/helm/frontend/values.yaml  → image.tag: "$V"
+# 3. register-infra/ — bump image.tag and appVersion, then push.
+#    image.tag is the deploy lever (ArgoCD rolls on it); appVersion is
+#    informational-only (`helm ls` display) but keep it in sync too.
+#    infra/helm/register/values.yaml   → image.tag: "$V"
+#    infra/helm/register/Chart.yaml    → appVersion: "$V"
+#    infra/helm/frontend/values.yaml   → image.tag: "$V"
+#    infra/helm/frontend/Chart.yaml    → appVersion: "$V"
 cd ~/projects/register-infra
 git add infra/helm/register infra/helm/frontend
 git commit -m "deploy register + frontend $V"
@@ -61,7 +63,7 @@ kubectl -n register rollout status deployment/frontend --timeout=180s
 kubectl -n register get pods -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}'
 ```
 
-## Gotchas (each one cost us a confused minute on 2026-07-10)
+## Gotchas
 
 - **`rollout status` right after `git push` reports success on the OLD
   deployment** — ArgoCD hasn't polled yet. Check
@@ -78,8 +80,7 @@ kubectl -n register get pods -o jsonpath='{range .items[*]}{.spec.containers[0].
   only when `hdr-rng`/`vague-quantifier-logic` sources change (see register
   repo's register-dev skill / `docs/user/IMAGE-BUILD-REFERENCE.md`).
 - **The build uses the register WORKING TREE, not a git ref** — make sure the
-  checkout is what you intend to ship (the L2 status notes require an image
-  from current `main`).
+  checkout is what you intend to ship.
 
 ## Production (Hetzner) difference
 
