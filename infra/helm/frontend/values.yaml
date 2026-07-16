@@ -8,7 +8,7 @@
 # Production: push to GHCR and let Image Updater manage the tag.
 image:
   repository: local/frontend
-  tag: "0.3.0"
+  tag: "0.4.0"
   pullPolicy: Never
 
 # Single replica is sufficient. The frontend is stateless (all state is in

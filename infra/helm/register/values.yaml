@@ -9,7 +9,7 @@ image:
   # ArgoCD a real diff to roll on — push only AFTER the import, or the pod goes
   # ErrImageNeverPull (pullPolicy: Never).
   # In production (Hetzner), Image Updater will overwrite this with the real GHCR digest.
-  tag: "0.3.0"
+  tag: "0.4.0"
   pullPolicy: Never
 
 # Number of application replicas.
