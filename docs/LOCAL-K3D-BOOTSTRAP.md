@@ -1509,6 +1509,46 @@ kubectl -n register rollout status deployment/register --timeout=60s
 # kubectl -n register rollout status statefulset/irmin --timeout=60s
 ```
 
+### Versioned import (instead of `:dev`)
+
+> **When do you need this?** The `:dev` loop above always overwrites the same
+> tag, so it's fine for the inner rebuild-test cycle but leaves no record of
+> which app version is actually running. Use a version tag when you want the
+> cluster to run — and keep — a specific `build.sbt` version, e.g. to match
+> what `infra/helm/register/values.yaml` currently pins
+> (`image.tag: "0.3.0"` at the time of writing — check the file, it may have
+> drifted from `build.sbt`'s current version).
+>
+> The build side of this (`APP_VERSION` from `build.sbt`, `docker build -t
+> local/register-server:${APP_VERSION} ...`) is documented in
+> `risquanter/register`'s
+> [IMAGE-BUILD-REFERENCE.md — Application images (versioned)](../../register/docs/user/IMAGE-BUILD-REFERENCE.md#application-images-versioned).
+> `k3d image import` itself doesn't care what the tag looks like — `:dev`
+> and a version string are both just tags to it.
+
+```bash
+# ── Build a versioned image (from ~/projects/register) ──
+cd ~/projects/register
+sed -n 's/ThisBuild \/ version[[:space:]]*:= "\(.*\)"/APP_VERSION=\1/p' build.sbt > .env
+source .env
+docker build -f containers/prod/Dockerfile.register-prod -t local/register-server:${APP_VERSION} .
+# docker build -f containers/prod/Dockerfile.frontend-prod -t local/frontend:${APP_VERSION} ..   # if frontend changed
+
+# ── Import the versioned tag into k3d ──
+cd ~/projects/register-infra
+k3d image import local/register-server:${APP_VERSION} -c register-dev
+# k3d image import local/frontend:${APP_VERSION} -c register-dev   # if frontend changed
+```
+
+> **This alone does not change what's deployed.** `k3d image import` only
+> loads the image into containerd — ArgoCD still renders the chart with
+> whatever `image.tag` is set in `infra/helm/register/values.yaml` (or an
+> Application-level override). To actually roll onto the new version, update
+> that `tag:` value, commit, and let ArgoCD sync — or, for a throwaway local
+> test only, `kubectl -n register set image deployment/register
+> register=local/register-server:${APP_VERSION}` and roll back the values.yaml
+> drift this creates before the next ArgoCD sync overwrites it.
+
 ---
 
 ## 14) Teardown
