@@ -23,8 +23,8 @@ Four AppProjects replace `default`:
 
 | Project | Apps | Allowed Namespaces | Cluster-Scoped Kinds |
 |---------|------|--------------------|---------------------|
-| `platform` | namespaces, mesh-policy, opa | default, register, argocd, istio-system, infra | Namespace, ClusterPolicy |
-| `infra` | postgresql, keycloak | infra | None |
+| `platform` | namespaces, mesh-policy, opa | default, register, argocd, istio-system, infra, kyverno | Namespace, ClusterPolicy, ClusterIssuer |
+| `infra` | postgresql, keycloak, spicedb | infra | None |
 | `app` | register, irmin, frontend | register | None |
 | `kyverno` | kyverno | kyverno | CRD, MutatingWebhookConfiguration, ValidatingWebhookConfiguration, ClusterRole, ClusterRoleBinding |
 

@@ -36,7 +36,7 @@
 ║  │  │                                                          │   │ ║
 ║  │  │  4. Inject x-user-id  ← JWT.sub                          │   │ ║
 ║  │  │         x-user-email  ← JWT.email                        │   │ ║
-║  │  │         x-user-roles  ← JWT.roles claim                  │   │ ║
+║  │  │         x-user-roles  ← JWT.realm_access.roles           │   │ ║
 ║  │  └──────────────────────┬───────────────────────────────────┘   │ ║
 ║  │                          │  mTLS  (ztunnel, L4)                 │ ║
 ║  │                          │  + NetworkPolicy: only waypoint      │ ║
@@ -152,8 +152,11 @@
                      (no JWT required) and OPA (no role check).
                      Layer 1: key is an invitation token; x-user-id (from ①–③) also required.
 
-⑤ INSTANCE AUTHZ →  SpiceDB (app layer — Layer 2: deployed + schema loaded,
-                     not yet consulted while REGISTER_AUTH_MODE=capability-only)
+⑤ INSTANCE AUTHZ →  SpiceDB (app layer — Layer 2: deployed, not yet consulted
+                     while REGISTER_AUTH_MODE=capability-only. The schema is
+                     authored in the register repo at infra/spicedb/schema.zed
+                     and applied with `zed schema write` — manually until the
+                     ADR-INFRA-011 runner exists)
                      Application calls SpiceDB.check(userId, permission, resourceRef).
                      Questions answered:
                        - Is this specific user a member of this specific workspace?
@@ -165,7 +168,9 @@
                      Default deny-all on register namespace.
                      Explicit allow: waypoint → app pod (ingress).
                      Explicit allow: app pod → postgres:5432 (egress).
-                     Explicit allow: app pod → keycloak:80 (egress).
+                     Explicit allow: app pod → keycloak:8080 (egress; the
+                     Service port 80 never appears in NetworkPolicy — policies
+                     match the container port).
                      Everything else dropped at the kernel level.
 ```
 

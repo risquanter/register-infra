@@ -2,7 +2,7 @@
 
 > **Implementation note (2026-03-18):** `infra/secrets/register-db.enc.yaml`
 > does not exist yet — the register app still uses in-memory storage.
-> Tracked in [TODO.md](../../TODO.md) § Deferred.
+> Tracked in [TODO.md](../TODO.md) § Deferred.
 
 **Status:** Accepted  
 **Date:** 2026-03-07  

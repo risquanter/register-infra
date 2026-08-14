@@ -215,12 +215,12 @@ Trivy cannot programmatically verify these controls and marks them as
 
 | Suite | Tests | Layer | Key Checks |
 |-------|:-----:|-------|------------|
-| `header-security.bats` | 17 | L1+L2 | Envoy filter chain, JWT accept/reject, header stripping, C1 guard |
+| `header-security.bats` | 21 | L1+L2 | Envoy filter chain, JWT accept/reject, header stripping, C1 guard |
 | `mtls-enforcement.bats` | 11 | L0 | PeerAuth STRICT, ztunnel HBONE capture, zero PERMISSIVE exceptions (all retired) |
-| `network-isolation.bats` | 23 | L0 | Default-deny, HBONE, per-service, CiliumNP, negative tests |
-| `opa-authz.bats` | 19 | L2 | OPA infra, public routes, auth/unauth, viewer deny, admin gate |
-| `health-probes.bats` | 12 | L0+hardening | Readiness, health endpoints, probe config, port isolation |
-| `pod-security.bats` | 15 | Hardening | automount, non-root, readOnlyFS, hostNS, LimitRange |
+| `network-isolation.bats` | 32 | L0 | Default-deny, HBONE, per-service, CiliumNP, negative tests |
+| `opa-authz.bats` | 21 | L2 | OPA infra, public routes, auth/unauth, viewer deny, admin gate, OPA ConfigMap policy content, ROPC rejection by the realm |
+| `health-probes.bats` | 15 | L0+hardening | Readiness, health endpoints, probe config, port isolation |
+| `pod-security.bats` | 16 | Hardening | automount, non-root, readOnlyFS, hostNS, LimitRange |
 | `spicedb.bats` | 10 | L2 | SpiceDB health/PDB, register wiring (secret + env), live mesh probe (HTTP gateway through HBONE), schema loaded, wrong-key rejection |
 | `spicedb-provisioning.bats` | 11 | L2 | K.6 reconcile job: config flatten validation (fail-closed), live idempotence, orphan WARN+delete+strict-drift exit, owner_user survival (B-K6-4), no credential leakage |
 
@@ -564,7 +564,11 @@ tests/
 │   ├── mtls-enforcement.bats       # L0: mTLS + mesh identity
 │   ├── network-isolation.bats      # L0: NetworkPolicy + CiliumNP
 │   ├── opa-authz.bats              # L2: OPA ext_authz behaviour
-│   └── pod-security.bats           # Hardening: pod security posture
+│   ├── pod-security.bats           # Hardening: pod security posture
+│   ├── spicedb.bats                # L2: SpiceDB health + register wiring
+│   ├── spicedb-provisioning.bats   # L2: K.6 reconcile job behaviour
+│   └── helpers/
+│       └── spicedb-probe.bash      # Shared SpiceDB probe-pod helper
 ├── conftest/
 │   └── policy/
 │       ├── authorizationpolicy.rego

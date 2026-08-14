@@ -906,34 +906,39 @@ kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
 > ArgoCD applies it (reconciliation). This means git history IS your audit
 > trail — every cluster change is a commit with an author and timestamp.
 
-### 7.1 Update Application manifests with your repo URL
+### 7.1 Check the repo URL in the Application manifests
+
+The ArgoCD Application manifests reference this repository by its SSH URL,
+`git@github.com:risquanter/register-infra.git`. The files under
+`infra/argocd/apps/` that carry this repoURL are: `root.yaml` (both
+`sources` entries), `namespaces.yaml`, `register.yaml`, `mesh-policy.yaml`,
+`opa.yaml`, `keycloak.yaml`, `frontend.yaml`, `irmin.yaml`, and
+`spicedb.yaml`. The other two files reference external Helm chart
+repositories and never point at this repository: `postgresql.yaml`
+(`https://charts.bitnami.com/bitnami`) and `kyverno.yaml`
+(`https://kyverno.github.io/kyverno/`).
+
+- **Deploying this repository as-is**: no change is needed.
+- **Deploying from your own fork**: replace the repoURL in every file listed
+  above with your fork's SSH URL. Use the SSH form: ArgoCD authenticates with
+  a deploy key (§7.2), and HTTPS + SSH key does not work. The AppProject
+  definitions under `infra/argocd/projects/` whitelist the same URL in
+  `sourceRepos` — update those too, or ArgoCD rejects the Applications.
 
 ```bash
-# WHAT: replace the <org> placeholder with the SSH URL in all ArgoCD
-# Application files that reference this repository.
-# WHY SSH URL: ArgoCD will authenticate with a deploy key (SSH), so the
-#   manifests must use the SSH form of the URL. HTTPS + SSH key does not work.
-# NOTE: files that reference external chart repos (e.g. postgresql.yaml
-#   pointing at charts.bitnami.com) do not need this change.
-#   Files pointing at local chart paths (keycloak.yaml, frontend.yaml,
-#   irmin.yaml) also use the SSH repo URL and are included below.
+# Fork deployment only — skip if using this repository as-is.
 cd /home/danago/projects/register-infra
 
-REPO_URL="git@github.com:risquanter/register-infra.git"
+FORK_URL="git@github.com:<your-org>/register-infra.git"
 
-sed -i "s|https://github.com/<org>/register-infra|${REPO_URL}|g" \
-  infra/argocd/apps/root.yaml \
-  infra/argocd/apps/namespaces.yaml \
-  infra/argocd/apps/register.yaml \
-  infra/argocd/apps/mesh-policy.yaml \
-  infra/argocd/apps/opa.yaml \
-  infra/argocd/apps/keycloak.yaml \
-  infra/argocd/apps/frontend.yaml \
-  infra/argocd/apps/irmin.yaml
+# WHAT: replace the repoURL in every ArgoCD manifest that references this
+# repository (Application sources and AppProject sourceRepos).
+grep -rl "git@github.com:risquanter/register-infra.git" infra/argocd/ \
+  | xargs sed -i "s|git@github.com:risquanter/register-infra.git|${FORK_URL}|g"
 
 # WHAT: commit so ArgoCD sees the correct URL when it clones.
-git add infra/argocd/apps/
-git commit -m "chore: set SSH repo URL in ArgoCD Application manifests"
+git add infra/argocd/
+git commit -m "chore: point ArgoCD manifests at fork"
 git push
 ```
 
@@ -1028,23 +1033,35 @@ cd ~/projects/register
 # separate `docker build`/`docker tag` steps needed. `docker compose build`
 # ignores profile gating (only `up`/`start` respect profiles), so this works
 # even though irmin and frontend are profile-gated for `up`.
-# No .env file is required for local dev: compose falls back to the `dev` tag
-# when APP_VERSION is unset (see register/docs/user/DOCKER-DEVELOPMENT.md).
-# Produces: local/register-server:dev, local/irmin-prod:3.11, local/frontend:dev
-# — these tags already match what the Helm charts expect (infra/helm/register,
-# infra/helm/irmin, infra/helm/frontend values.yaml).
+# TAGS MUST MATCH THE CHARTS: the Helm charts pin the tag they deploy via
+# `image.tag` in each chart's values.yaml — currently "0.4.0" for register
+# (infra/helm/register/values.yaml) and frontend (infra/helm/frontend/
+# values.yaml), and "3.11" for irmin (infra/helm/irmin/values.yaml). The
+# authoritative tag is whatever image.tag currently is in each values.yaml —
+# check those files and use the same values here. With pullPolicy Never, a
+# tag mismatch fails the pod with ErrImageNeverPull.
+# APP_VERSION sets the tag for register-server and frontend
+# (compose tags them local/register-server:${APP_VERSION:-dev} and
+# local/frontend:${APP_VERSION:-dev}); the irmin tag is pinned directly in
+# docker-compose.yml.
+export APP_VERSION=0.4.0   # = image.tag in the register and frontend charts
 docker compose build register-server
 docker compose build irmin
 docker compose build frontend
+
+# If the irmin tag produced by compose (`docker images local/irmin-prod`)
+# differs from the chart's image.tag, retag it to the chart's value:
+# docker tag local/irmin-prod:<compose-tag> local/irmin-prod:3.11
 
 # ── Import all three images into the k3d cluster ──
 # WHAT: loads the images directly into k3d's containerd image store.
 # No registry is involved. This is the only way to update images when
 # imagePullPolicy is set to Never.
+# The imported tags must be the same tags the charts pin (see above).
 cd ~/projects/register-infra
-k3d image import local/register-server:dev -c register-dev
+k3d image import local/register-server:0.4.0 -c register-dev
 k3d image import local/irmin-prod:3.11 -c register-dev
-k3d image import local/frontend:dev -c register-dev
+k3d image import local/frontend:0.4.0 -c register-dev
 
 # ── Import the Keycloak image ──
 # WHAT: quay.io multi-arch images fail with `k3d image import`.
@@ -1056,14 +1073,15 @@ docker save quay.io/keycloak/keycloak:26.0 \
   | docker exec -i k3d-register-dev-server-0 ctr --namespace k8s.io images import -
 ```
 
-> **After rebuilds**: repeat the build + import + rollout restart cycle:
+> **After rebuilds**: repeat the build + import + rollout restart cycle
+> (tags again from each chart's values.yaml):
 > ```bash
 > cd ~/projects/register
-> docker compose build register-server
+> APP_VERSION=0.4.0 docker compose build register-server
 > cd ~/projects/register-infra
-> k3d image import local/register-server:dev -c register-dev
-> # k3d image import local/irmin-prod:3.11 -c register-dev  # if irmin changed
-> # k3d image import local/frontend:dev -c register-dev     # if frontend changed
+> k3d image import local/register-server:0.4.0 -c register-dev
+> # k3d image import local/irmin-prod:3.11 -c register-dev   # if irmin changed
+> # k3d image import local/frontend:0.4.0 -c register-dev    # if frontend changed
 > kubectl -n register rollout restart deployment/register
 > # kubectl -n register rollout restart statefulset/irmin    # if irmin changed
 > # kubectl -n register rollout restart deployment/frontend  # if frontend changed
@@ -1096,9 +1114,11 @@ ArgoCD will now discover and deploy these Applications automatically:
 
 | ArgoCD Application | What it deploys | Source location |
 |---|---|---|
-| `namespaces` | `argocd`, `register`, `infra`, `observability` namespaces with Pod Security labels, mesh enrollment, and LimitRanges | `infra/helm/namespaces/` |
+| `namespaces` | `argocd`, `register`, `infra`, `observability`, `kyverno` namespaces with Pod Security labels, mesh enrollment, and LimitRanges | `infra/helm/namespaces/` |
+| `kyverno` | Kyverno admission controller in `kyverno` namespace (wave 1, `kyverno` project) | Upstream Helm chart v3.7.1 (remote) |
 | `postgresql` | PostgreSQL database in `infra` namespace | Bitnami Helm chart (remote) |
 | `keycloak` | Keycloak identity provider in `infra` namespace (init container copies `/opt/keycloak` to emptyDir for `readOnlyRootFilesystem: true`) | `infra/helm/keycloak/` (local chart, `quay.io/keycloak/keycloak:26.0`) |
+| `spicedb` | SpiceDB authorization service in `infra` namespace (wave 3, `infra` project) | `infra/helm/spicedb/` (local chart, `ghcr.io/authzed/spicedb`) |
 | `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
 | `irmin` | Irmin GraphQL persistence backend (StatefulSet + PVC) in `register` namespace | `infra/helm/irmin/` |
 | `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
@@ -1516,7 +1536,7 @@ kubectl -n register rollout status deployment/register --timeout=60s
 > which app version is actually running. Use a version tag when you want the
 > cluster to run — and keep — a specific `build.sbt` version, e.g. to match
 > what `infra/helm/register/values.yaml` currently pins
-> (`image.tag: "0.3.0"` at the time of writing — check the file, it may have
+> (`image.tag: "0.4.0"` at the time of writing — check the file, it may have
 > drifted from `build.sbt`'s current version).
 >
 > The build side of this (`APP_VERSION` from `build.sbt`, `docker build -t

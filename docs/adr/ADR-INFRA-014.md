@@ -1,6 +1,6 @@
 # ADR-INFRA-014: Multi-Environment GitOps Topology
 
-**Status:** Accepted
+**Status:** Accepted (awaiting implementation)
 **Date:** 2026-07-08
 **Tags:** gitops, argocd, helm, multi-cluster, environments, blast-radius
 

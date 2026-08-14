@@ -1,6 +1,6 @@
 # ADR-INFRA-011: SpiceDB Schema Lifecycle — In-Cluster CI Runner Pattern
 
-**Status:** Accepted  
+**Status:** Accepted (awaiting implementation)
 **Date:** 2026-03-17  
 **Tags:** spicedb, schema, ci-runner, gitops, vendor-agnostic
 

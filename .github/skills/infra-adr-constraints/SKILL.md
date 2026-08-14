@@ -42,6 +42,10 @@ user-invokable: true
 | `deny` conditions integrated via `not denied` inside `allow` | `allow.rego` decision path | ADR-INFRA-009 §3 |
 | `failure_mode_deny: true` with consequence comment referencing ADR-INFRA-002 | Every ext_authz EnvoyFilter | ADR-INFRA-002 §3 |
 | Two focused AuthorizationPolicies: `require-jwt` + `allow-capability-urls` | `register` namespace L7 policy | ADR-INFRA-007 §3 |
+| HTTPS-only Gateway on :443, cert from a cert-manager ClusterIssuer | External ingress (`infra/k8s/istio/ingress-gateway.yaml`) | ADR-INFRA-013 §2 |
+| `world` ingress allow scoped to the Gateway pod on 443 only | The single public front door under default-deny | ADR-INFRA-013 §3 |
+| `destination.server: https://kubernetes.default.svc` | Every ArgoCD Application | ADR-INFRA-014 §1 |
+| One SpiceDB preshared key per calling component, per-namespace secret | SpiceDB consumers (register app, runner) | ADR-INFRA-015 §1 |
 
 ---
 
@@ -86,6 +90,15 @@ user-invokable: true
 |---|---|
 | `bitnami/postgresql` | `https://charts.bitnami.com/bitnami` |
 | `kyverno/kyverno` | `https://kyverno.github.io/kyverno/` |
+
+---
+
+### Helm Chart Sourcing (ADR-INFRA-016)
+
+❌ NEVER deploy a workload from an upstream Helm chart by default.
+✅ INSTEAD: local chart under `infra/helm/<workload>/`; the digest-pinned container image is the only external artifact.
+
+An upstream chart is admissible only when all three ADR-INFRA-016 §2 conditions hold: official maintainer (the vendor org that publishes the image), resolvable `index.yaml` + exact `targetRevision` pin, and a rationale comment in the Application manifest.
 
 ---
 
@@ -177,12 +190,45 @@ failure_mode_deny: true
 
 ---
 
+### External Ingress Datapath (ADR-INFRA-013)
+
+❌ NEVER enable Cilium `kubeProxyReplacement` — it breaks istiod/ztunnel startup in ambient mode.
+✅ INSTEAD: kube-proxy + k3s servicelb (klipper) own the service datapath; Cilium is CNI + NetworkPolicy only.
+
+❌ NEVER add a plaintext :80 content listener on the external Gateway — JWTs and capability URLs are credentials.
+✅ INSTEAD: TLS-only on :443; :80 may only ever be a 301 redirect.
+
+❌ NEVER admit Cilium identity `world` with a broad `endpointSelector`.
+✅ INSTEAD: scope the `world` allow to the Gateway pod on 443 — the single intended front door.
+
+---
+
+### Multi-Environment Topology (ADR-INFRA-014 — awaiting implementation)
+
+❌ NEVER register one cluster's ArgoCD against another cluster (`argocd cluster add`, remote `destination.server`).
+✅ INSTEAD: one ArgoCD instance per cluster; every Application targets `https://kubernetes.default.svc`.
+
+❌ NEVER flip environment-specific values (image provenance, hostname, TLS issuer) in place in a shared `values.yaml`.
+✅ INSTEAD: shared `values.yaml` + `values-local.yaml`/`values-hetzner.yaml` overlays for the charts with genuine environment coupling (register, keycloak, frontend, irmin); raw manifests default to `shared/` and split per environment only on real divergence.
+
+---
+
+### SpiceDB Write-Scoping (ADR-INFRA-015 — awaiting implementation)
+
+❌ NEVER share one SpiceDB preshared key across calling components.
+✅ INSTEAD: one key per caller (SpiceDB's own secret carries the comma-separated list); each caller holds only its own key in a per-namespace secret.
+
+❌ NEVER scope SpiceDB `WriteRelationships` by bearer token alone.
+✅ INSTEAD: ext_authz gate keyed on the caller's mTLS-verified SPIFFE identity with a static per-identity relation allowlist; reads (`Check`, `LookupResources`, `ReadSchema`) pass ungated.
+
+---
+
 ## Escape-Hatch Triggers — Stop and Ask
 
 Any of the following require a `⚠️ Decision Required` before proceeding:
 
 1. Any change to `namespaceResourceWhitelist` or `clusterResourceWhitelist` in an AppProject
-2. **Any new external `repoURL`** — apply ADR-INFRA-012 §2 three-condition test before raising; if any condition fails, the answer is a local chart, not a question
+2. **Any new external `repoURL`** — apply ADR-INFRA-016 §2 three-condition test before raising; if any condition fails, the answer is a local chart, not a question
 3. Widening any security resource: removing a NetworkPolicy rule, relaxing PeerAuthentication mode, adding a public path exception to AuthorizationPolicy
 4. Changing a SOPS secret key name (all consumers break on next sync)
 5. Setting `failure_mode_deny: false` or switching an ext_authz filter to fail-open
@@ -209,4 +255,4 @@ All ADRs present in `docs/adr/` are live regardless of their "Status:" field.
 Deletion is the only form of archival — a file that exists is in force.
 Treat every existing ADR document as accepted for alignment purposes.
 
-Current ADRs in force: ADR-INFRA-001 through ADR-INFRA-012.
+Current ADRs in force: ADR-INFRA-001 through ADR-INFRA-016.

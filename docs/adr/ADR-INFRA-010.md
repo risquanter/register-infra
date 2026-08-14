@@ -1,7 +1,7 @@
 # ADR-INFRA-010: SpiceDB Runtime — Helm Deployment, Network Isolation, and Fail-Closed Availability
 
-**Status:** Accepted  
-**Date:** 2026-03-17  
+**Status:** Accepted
+**Date:** 2026-03-17
 **Tags:** spicedb, authorization, zanzibar, gitops, fail-closed
 
 ---
@@ -18,15 +18,9 @@
 
 ## Decision
 
-### 1. External Helm Chart in `infra` Namespace via ArgoCD
+### 1. Local Helm Chart in `infra` Namespace via ArgoCD
 
-SpiceDB deploys as an ArgoCD Application using the official `authzed/spicedb` chart, into the `infra` namespace alongside PostgreSQL and Keycloak. This follows the same pattern as the PostgreSQL deployment.
-
-> **⚠ Implementation note (2026-03-18):** The official Helm repo
-> `https://authzed.github.io/helm-charts` currently returns 404. Before
-> implementing, verify chart availability or evaluate alternatives
-> (community chart `pschichtel/spicedb`, local chart wrapping the container
-> image, or raw manifests).
+SpiceDB deploys as an ArgoCD Application from the local chart `infra/helm/spicedb`, into the `infra` namespace alongside PostgreSQL and Keycloak. Chart sourcing follows ADR-INFRA-016: no official vendor chart exists, so the chart is authored in this repo and the digest-pinned container image (`ghcr.io/authzed/spicedb`) is the only external artifact. The chart ships the Deployment, Service, PDB, ServiceAccount, a pre-install db-init Job (creates the `spicedb` database and role), and a migrate Job (`spicedb datastore migrate head`).
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -37,90 +31,67 @@ metadata:
 spec:
   project: infra
   source:
-    repoURL: https://authzed.github.io/helm-charts
-    chart: spicedb
-    targetRevision: "<pinned-version>"
-    helm:
-      releaseName: spicedb
-      valuesObject:
-        replicaCount: 2
-        dispatch:
-          enabled: true
-        datastore:
-          engine: postgres
-          connUri:
-            secretRef: spicedb-datastore-uri
-        grpc:
-          presharedKey:
-            secretRef: spicedb-preshared-key
+    repoURL: git@github.com:risquanter/register-infra.git
+    path: infra/helm/spicedb
+    targetRevision: HEAD
   destination:
     server: https://kubernetes.default.svc
     namespace: infra
-  syncPolicy:
-    automated: { prune: true, selfHeal: true }
 ```
 
 ### 2. Fail-Closed Availability — Two Replicas + PDB
 
-Per ADR-INFRA-002, every `failure_mode_deny: true` component requires ≥ 2 replicas and a PodDisruptionBudget. SpiceDB is fail-closed (app treats any SpiceDB error as 403), so:
+Per ADR-INFRA-002, every fail-closed component requires ≥ 2 replicas and a PodDisruptionBudget. SpiceDB is fail-closed (the app treats any SpiceDB error as 403), so `infra/helm/spicedb/values.yaml` sets:
 
 ```yaml
 replicaCount: 2
-
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 1
 ```
+
+with a PDB (`minAvailable: 1`) in the chart's templates.
 
 ### 3. NetworkPolicy — Explicit Cross-Namespace Flows
 
-SpiceDB accepts connections from the register namespace and connects to PostgreSQL within infra. All other traffic is blocked by the existing default-deny policy in infra.
+SpiceDB accepts connections from the register application pod and connects to PostgreSQL within infra. All other traffic is blocked by the default-deny policy in infra.
 
-Two distinct ports are needed by different consumers:
-- **8443** (HTTPS, gRPC-gateway REST API): used by `AuthorizationServiceSpiceDB` in the register app. `SpiceDbConfig.url` enforces `SecureUrl` (HTTPS-only constraint) — the app connects via SpiceDB's REST transcoding layer, not native gRPC.
-- **50051** (gRPC): used by the `zed` CLI in the ARC runner for `zed schema write` (ADR-INFRA-011).
+Two ports serve different consumers:
+- **8080** (HTTP, gRPC-gateway REST API): used by `AuthorizationServiceSpiceDB` in the register app. `SpiceDbConfig.url` uses `SafeUrl` — HTTP in-cluster; the mesh encrypts the hop via HBONE, so TLS at the application layer is not required. Kubelet health probes (`GET /healthz`, source-NATed to `169.254.7.127` by ztunnel) also land on this port under a dedicated CiliumNetworkPolicy (ADR-INFRA-004 §4).
+- **50051** (native gRPC): reserved for the `zed` CLI in the ARC runner (`zed schema write`, ADR-INFRA-011). The runner namespace is not deployed; the corresponding ingress rule is a commented stub in `infra/k8s/network-policy/infra.yaml`.
 
 ```yaml
-# register → spicedb:8443 (HTTPS REST — app AuthorizationServiceSpiceDB via SecureUrl)
+# register app pod → spicedb:8080 (HTTP gRPC-gateway; HBONE encrypts the hop)
 - from:
-  - namespaceSelector:
-      matchLabels:
-        kubernetes.io/metadata.name: register
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: register
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: register
   ports:
-  - protocol: TCP
-    port: 8443
-
-# runner → spicedb:50051 (gRPC — zed CLI schema write, ADR-INFRA-011)
-- from:
-  - namespaceSelector:
-      matchLabels:
-        kubernetes.io/metadata.name: runner
-  ports:
-  - protocol: TCP
-    port: 50051
+    - protocol: TCP
+      port: 8080
 
 # spicedb → postgresql:5432 (datastore)
 - to:
-  - podSelector:
-      matchLabels:
-        app.kubernetes.io/name: postgresql
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgresql
   ports:
-  - protocol: TCP
-    port: 5432
+    - protocol: TCP
+      port: 5432
 ```
 
 ### 4. Secrets — SOPS-Encrypted, Per-Namespace
 
-Two secrets follow the ADR-INFRA-006 pattern (SOPS + age/YubiKey):
+One secret per namespace, following the ADR-INFRA-006 per-namespace pattern:
 
-| Secret | Content | Consumers |
-|--------|---------|-----------|
-| `spicedb-preshared-key` | Pre-shared gRPC API token | SpiceDB pods, register app |
-| `spicedb-datastore-uri` | `postgres://spicedb:...@postgresql.infra:5432/spicedb` | SpiceDB pods |
+| Secret | Namespace | Keys | Consumers |
+|--------|-----------|------|-----------|
+| `spicedb-credentials` (from `infra/secrets/spicedb.enc.yaml`) | infra | `preshared-key`, `datastore-uri`, `db-password` | SpiceDB pods, db-init Job |
+| `spicedb-preshared-key-register` (from `infra/secrets/spicedb-register.enc.yaml`) | register | `spicedb-preshared-key` | register app (`SPICEDB_TOKEN`) |
 
 ```bash
 # Encrypt with SOPS (same keyring as keycloak.enc.yaml / postgres.enc.yaml)
-sops --encrypt --age <age-public-key> spicedb.enc.yaml > infra/secrets/spicedb.enc.yaml
+sops --encrypt --age <age-public-key> spicedb.yaml > infra/secrets/spicedb.enc.yaml
 ```
 
 ---
@@ -153,9 +124,8 @@ grpc:
 
 ```yaml
 # GOOD: per-environment SOPS-encrypted secret, distinct key per cluster.
-grpc:
-  presharedKey:
-    secretRef: spicedb-preshared-key    # decrypted by ArgoCD SOPS plugin
+credentials:
+  secretName: spicedb-credentials    # created from SOPS-decrypted manifest
 ```
 
 ---
@@ -164,19 +134,25 @@ grpc:
 
 | Location | Pattern |
 |----------|--------|
-| `infra/argocd/apps/spicedb.yaml` | ArgoCD Application — external chart (Decision §1) |
-| `infra/k8s/network-policy/infra.yaml` | Add ingress rules: `register → spicedb:8443` (app HTTPS REST) + `runner → spicedb:50051` (zed CLI gRPC, ADR-INFRA-011) (Decision §3) |
-| `infra/secrets/spicedb.enc.yaml` | SOPS-encrypted pre-shared key + datastore URI (Decision §4) |
-| `infra/argocd/projects/infra.yaml` | Verify SpiceDB CRDs / resources are whitelisted |
+| `infra/helm/spicedb/` | Local chart: Deployment (digest-pinned image), Service (8080/50051), PDB, db-init Job, migrate Job (Decision §1, §2) |
+| `infra/argocd/apps/spicedb.yaml` | ArgoCD Application — local chart, project `infra` (Decision §1) |
+| `infra/k8s/network-policy/infra.yaml` | `allow-ingress-spicedb-from-register` (8080), `allow-egress-spicedb-to-postgres` (5432), `allow-ingress-spicedb-healthcheck` (CiliumNetworkPolicy, probe SNAT CIDR), commented runner stub (Decision §3) |
+| `infra/secrets/spicedb.enc.yaml`, `infra/secrets/spicedb-register.enc.yaml` | SOPS-encrypted per-namespace secrets (Decision §4) |
+| `infra/argocd/projects/infra.yaml` | `batch/Job` in `namespaceResourceWhitelist` for the db-init and migrate Jobs |
 
 ---
 
 ## Alternatives Rejected
 
+### External Helm chart
+
+- **What**: deploy from a chart registry (`authzed/helm-charts` official, or the community `pschichtel/spicedb`).
+- **Why rejected**: the official URL serves no usable chart registry and community charts fail the vendor identity requirement. Chart sourcing policy, verification steps, and the full rejection rationale: ADR-INFRA-016.
+
 ### SpiceDB Operator (authzed/spicedb-operator)
 
 - **What**: deploy SpiceDB via the official Kubernetes operator and `SpiceDBCluster` CRD
-- **Why rejected**: adds an operator lifecycle (CRD upgrades, RBAC for operator SA, controller availability). The Helm chart is simpler — one ArgoCD Application with pinned version. Operator benefits (automated migration, version rollout) are not needed at current scale (single cluster, 2 replicas).
+- **Why rejected**: adds an operator lifecycle (CRD upgrades, RBAC for operator SA, controller availability). A local chart is simpler — one ArgoCD Application pinned to a digest. Operator benefits (automated migration, version rollout) are not needed at current scale (single cluster, 2 replicas).
 
 ### In-Memory Datastore
 
@@ -197,5 +173,5 @@ grpc:
 - [ADR-INFRA-006](ADR-INFRA-006.md) — SOPS-encrypted secrets pattern
 - [ADR-INFRA-009](ADR-INFRA-009.md) — BeyondCorp identity model (OPA reads headers, SpiceDB receives userId)
 - [ADR-INFRA-011](ADR-INFRA-011.md) — Schema lifecycle: in-cluster runner pattern
-- SpiceDB Helm Charts: https://github.com/authzed/helm-charts
+- [ADR-INFRA-016](ADR-INFRA-016.md) — Helm chart sourcing: local charts by default
 - Google Zanzibar (2019): https://research.google/pubs/pub48190/

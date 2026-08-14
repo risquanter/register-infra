@@ -76,10 +76,20 @@ infra/
       values.yaml
       templates/
         _helpers.tpl
-        deployment.yaml
+        statefulset.yaml        #   StatefulSet with volumeClaimTemplate for workspace data
         service.yaml
         serviceaccount.yaml
-        pvc.yaml
+    spicedb/                    # SpiceDB authorization service (local chart, ADR-INFRA-016)
+      Chart.yaml
+      values.yaml
+      templates/
+        _helpers.tpl
+        db-init-job.yaml        #   pre-install/pre-upgrade hook: creates SpiceDB database + role in PostgreSQL
+        deployment.yaml
+        migrate-job.yaml        #   pre-install/pre-upgrade hook: runs SpiceDB datastore migrations
+        pdb.yaml                #   PodDisruptionBudget (fail-closed, ADR-INFRA-002)
+        service.yaml
+        serviceaccount.yaml
   argocd/
     apps/                       # App of Apps directory — ArgoCD watches this
       root.yaml                 #   the single root Application
@@ -89,44 +99,58 @@ infra/
       register.yaml             #   application Deployment + Image Updater
       frontend.yaml             #   frontend SPA (nginx)
       irmin.yaml                #   Irmin GraphQL persistence backend
+      spicedb.yaml              #   SpiceDB authorization service (local chart)
       opa.yaml                  #   OPA Helm chart
       mesh-policy.yaml          #   Istio/OPA/NetworkPolicy/RBAC manifests
+      kyverno.yaml              #   Kyverno operator (upstream chart)
     projects/                   # AppProject definitions — least-privilege scoping
       platform.yaml             #   namespaces, mesh, OPA, RBAC, NetworkPolicy, ClusterPolicy
       infra.yaml                #   PostgreSQL, Keycloak
       app.yaml                  #   register application
       kyverno.yaml              #   Kyverno operator (CRDs, webhooks, RBAC)
   k8s/
+    cert-manager/               # cert-manager issuers
+      selfsigned-issuer.yaml    #   self-signed ClusterIssuer for local-dev ingress TLS
     istio/                      # Istio L7 security policies
       request-authentication.yaml
       authorization-policy.yaml
       peer-authentication.yaml
       envoy-filter-strip-headers.yaml
+      ingress-gateway.yaml      #   external HTTPS ingress: Gateway + HTTPRoute + Certificate (ADR-INFRA-007)
     kyverno/                    # Kyverno ClusterPolicies
       inject-seccomp-profile.yaml #  waypoint PSS seccomp mutation (ADR-INFRA-008)
     network-policy/             # Cilium NetworkPolicies (default-deny + allow rules)
       register.yaml
       infra.yaml
+      argocd.yaml               #   ArgoCD kubelet health-probe + HBONE access under the mesh
     opa/                        # OPA ext_authz EnvoyFilter wiring
       ext-authz-filter.yaml
     rbac/                       # RBAC role definitions
       roles.yaml
+  spicedb/
+    relationships.yaml          # source of truth for SpiceDB relationship tuples (reconciled by scripts/spicedb-provision.sh)
   secrets/                      # SOPS-encrypted Secret manifests (committed safely)
 docs/
   adr/                          # Architecture Decision Records
     ADR-00X.md                  #   template
     ADR-INFRA-001.md            #   Configuration single-source-of-truth
-    ADR-INFRA-002.md            #   Fail-closed availability guarantees
-    ADR-INFRA-003.md            #   AppProject scoping
-    ADR-INFRA-004.md            #   Defence-in-depth layered controls
-    ADR-INFRA-004-appendix.md   #   HBONE/waypoint appendix
+    ADR-INFRA-002.md            #   Fail-closed components require availability guarantees
+    ADR-INFRA-002-appendix.md   #   OPA namespace isolation analysis
+    ADR-INFRA-003.md            #   AppProject scoping — least-privilege ArgoCD boundaries
+    ADR-INFRA-004.md            #   Defense-in-depth — layered network and identity controls
+    ADR-INFRA-004-appendix.md   #   Ambient mesh security model deep-dive
     ADR-INFRA-005.md            #   Testing strategy — tool selection and skip semantics
     ADR-INFRA-006.md            #   Per-namespace SOPS secrets (DB credentials)
-    ADR-INFRA-007.md            #   SPA serving strategy (nginx frontend)
-    ADR-INFRA-008.md            #   Kyverno admission mutation (replaces PostSync hooks)
-    ADR-INFRA-009.md            #   BeyondCorp identity model (header-asserted identity)
-    ADR-INFRA-010.md            #   SpiceDB runtime deployment (future Layer 2)
-    ADR-INFRA-011.md            #   SpiceDB schema lifecycle (in-cluster CI runner)
+    ADR-INFRA-007.md            #   SPA serving strategy — nginx frontend + Istio Gateway ingress
+    ADR-INFRA-008.md            #   Kyverno admission mutation — policy-based pod patching
+    ADR-INFRA-009.md            #   BeyondCorp identity model — infrastructure-asserted headers
+    ADR-INFRA-010.md            #   SpiceDB runtime — Helm deployment, network isolation, fail-closed availability
+    ADR-INFRA-011.md            #   SpiceDB schema lifecycle — in-cluster CI runner pattern
+    ADR-INFRA-012.md            #   Supply chain defence — external dependency governance
+    ADR-INFRA-013.md            #   External ingress datapath
+    ADR-INFRA-014.md            #   Multi-environment GitOps topology
+    ADR-INFRA-015.md            #   SpiceDB write-scoping enforcement
+    ADR-INFRA-016.md            #   Helm chart sourcing — local charts by default
 tests/
   run-regression.sh             # wrapper with strict skip semantics (ADR-INFRA-005)
   bats/
@@ -155,7 +179,7 @@ ArgoCD uses four scoped AppProjects to enforce least-privilege boundaries
 
 | Project | Scope | Allowed namespaces | Can create cluster-scoped resources? |
 |---|---|---|---|
-| `platform` | Namespace provisioning, mesh policy, OPA, RBAC, NetworkPolicy, ClusterPolicy | default, register, argocd, istio-system, infra | Yes — Namespace, ClusterPolicy |
+| `platform` | Namespace provisioning, mesh policy, OPA, RBAC, NetworkPolicy, ClusterPolicy | default, register, argocd, istio-system, infra, kyverno | Yes — Namespace, ClusterPolicy |
 | `infra` | Infrastructure services (PostgreSQL, Keycloak) | infra only | No |
 | `app` | Application workloads (register, frontend, irmin) | register only | No |
 | `kyverno` | Kyverno operator (CRDs, webhooks, RBAC) | kyverno | Yes — CRD, webhooks, ClusterRole, ClusterRoleBinding |
@@ -169,11 +193,12 @@ Application and AppProject resources in the `argocd` namespace.
 |---|---|---|---|
 | [root.yaml](../infra/argocd/apps/root.yaml) | Root App of Apps | default | Watches `infra/argocd/apps/` + `infra/argocd/projects/` via `sources`, automated sync + prune + self-heal, cascade finalizer |
 | [namespaces.yaml](../infra/argocd/apps/namespaces.yaml) | Namespace Helm chart | platform | Points at `infra/helm/namespaces/`, creates namespaces with PSS labels, mesh enrollment, and LimitRanges |
-| [postgresql.yaml](../infra/argocd/apps/postgresql.yaml) | PostgreSQL database | infra | Bitnami chart v16.4.0, references `postgres-credentials` Secret, 10Gi PVC, hardened securityContext |
+| [postgresql.yaml](../infra/argocd/apps/postgresql.yaml) | PostgreSQL database | infra | Bitnami chart v18.5.5, references `postgres-credentials` Secret, 10Gi PVC, hardened securityContext |
 | [keycloak.yaml](../infra/argocd/apps/keycloak.yaml) | Keycloak IdP | infra | Local chart (`quay.io/keycloak/keycloak:26.0`), `start-dev` mode, health on management port 9000, connects to PostgreSQL via internal DNS |
 | [register.yaml](../infra/argocd/apps/register.yaml) | Application Deployment | app | Image Updater annotations for automated GHCR → git → cluster deploy loop |
 | [frontend.yaml](../infra/argocd/apps/frontend.yaml) | Frontend SPA | app | nginx 1.27.5-alpine-slim, serves built SPA, `BACKEND_URL` → register:8090 |
 | [irmin.yaml](../infra/argocd/apps/irmin.yaml) | Irmin persistence | app | `local/irmin-prod:3.11`, GraphQL + PVC for workspace data |
+| [spicedb.yaml](../infra/argocd/apps/spicedb.yaml) | SpiceDB authorization service | infra | Local chart at `infra/helm/spicedb/`, sync wave 3, `infra` namespace, 2 replicas + PDB, pre-install/pre-upgrade db-init and migration Jobs |
 | [opa.yaml](../infra/argocd/apps/opa.yaml) | OPA Helm chart | platform | 2 replicas + PDB, policy from single canonical Rego source via `Files.Get` |
 | [mesh-policy.yaml](../infra/argocd/apps/mesh-policy.yaml) | Security policies | platform | Istio JWT/auth, PeerAuthentication, OPA ext_authz EnvoyFilter, Kyverno ClusterPolicy, NetworkPolicies, RBAC role definitions |
 | [kyverno.yaml](../infra/argocd/apps/kyverno.yaml) | Kyverno operator | kyverno | Upstream chart v3.7.1, ServerSideApply, admissionController only (ADR-INFRA-008) |
@@ -198,7 +223,7 @@ issues with ztunnel — see [Troubleshooting](#postgresql-or-keycloak-crash-afte
 
 > **Note:** LimitRange sets default resource requests/limits but does not cap
 > total namespace consumption. A ResourceQuota will complement it once resource
-> profiles are understood. Tracked in [TODO.md](../TODO.md) § Phase 3.
+> profiles are understood. Tracked in [TODO.md](TODO.md) § Phase 3.
 
 ### OPA chart (`infra/helm/opa/`)
 

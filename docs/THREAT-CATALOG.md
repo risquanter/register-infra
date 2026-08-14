@@ -43,7 +43,7 @@ Each finding has:
 
 | | |
 |---|---|
-| **File** | `infra/helm/keycloak/templates/deployment.yaml` line 38 (`args: start-dev`) |
+| **File** | `infra/helm/keycloak/templates/deployment.yaml` line 73 (`args: start-dev`) |
 | **Finding** | Keycloak is started with `start-dev`, which disables the HTTPS requirement, enables dev-mode caching, and may expose dev-only endpoints. The same chart + values are referenced by the ArgoCD Application for the Hetzner production cluster — there is no `values-production.yaml` overlay. |
 | **Risk** | On the production Hetzner cluster, Keycloak would run in development mode. While Istio ambient provides transport encryption, `start-dev` also affects token caching, theme caching, and may expose the Keycloak admin console without hostname checks (see also L4 below). |
 
@@ -144,8 +144,8 @@ Each finding has:
 
 | | |
 |---|---|
-| **File** | `infra/secrets/keycloak.enc.yaml`, `postgres.enc.yaml` |
-| **Finding** | Both encrypted secrets have a single `age` recipient. If the key is lost (YubiKey failure, disk corruption), secrets are irrecoverable. No documented rotation procedure. |
+| **File** | `infra/secrets/keycloak.enc.yaml`, `postgres.enc.yaml`, `spicedb.enc.yaml`, `spicedb-register.enc.yaml` |
+| **Finding** | All four encrypted secrets have a single `age` recipient. If the key is lost (YubiKey failure, disk corruption), secrets are irrecoverable. No documented rotation procedure. |
 | **Risk** | Permanent data loss of encrypted secrets. Must re-create credentials from scratch (PostgreSQL re-init, Keycloak re-provision). |
 
 **Options**:
@@ -163,7 +163,7 @@ Each finding has:
 
 | | |
 |---|---|
-| **File** | `infra/terraform/main.tf` lines 271, 289 |
+| **File** | `infra/terraform/main.tf` lines 270, 287 |
 | **Finding** | ArgoCD API server and Image Updater run with `insecure=true`, relying on ambient mesh ztunnel for TLS. If the `argocd` namespace is removed from the mesh, the API is exposed over plaintext. |
 | **Risk** | Silent TLS downgrade if mesh enrollment label is removed. ArgoCD API exposed without encryption on the node. |
 
@@ -199,7 +199,7 @@ viewer-write and non-admin-cache deny conditions flow through the allow decision
 
 | | |
 |---|---|
-| **File** | `infra/terraform/main.tf` line 136 |
+| **File** | `infra/terraform/main.tf` line 135 |
 | **Finding** | SSH to the newly created Hetzner server disables host key verification. One-time bootstrap operation, mitigated by operator_cidr firewall rule. |
 | **Risk** | MITM during the ~90-second window after server creation. Attacker would need to be on the operator's network path to Hetzner. |
 
@@ -212,7 +212,7 @@ viewer-write and non-admin-cache deny conditions flow through the allow decision
 | | |
 |---|---|
 | **File** | `infra/k8s/rbac/roles.yaml` |
-| **Finding** | `viewer`, `deployer`, and `ci-authz` roles are defined but no RoleBindings exist. Current access is `system:masters` via kubeconfig. The `deployer` role includes `pods/exec`. |
+| **Finding** | `viewer` and `deployer` Roles are defined but no RoleBindings exist (`ci-authz` is only a placeholder comment, not a defined Role). Current access is `system:masters` via kubeconfig. The `deployer` role includes `pods/exec`. |
 | **Risk** | No audit trail for API server operations. When a second operator is added, the binding process is undocumented. |
 
 **Proposed**: Document the RoleBinding creation procedure in GITOPS-OPERATIONS.md. Create bindings when a second operator is added.
@@ -223,26 +223,26 @@ viewer-write and non-admin-cache deny conditions flow through the allow decision
 
 | | |
 |---|---|
-| **File** | `infra/helm/keycloak/templates/deployment.yaml` line 98 |
+| **File** | `infra/helm/keycloak/templates/deployment.yaml` lines 147-148 |
 | **Finding** | Disables hostname verification. Keycloak accepts tokens and UI access for any hostname. In production with a real domain, this should be tightened. |
 | **Risk** | Token confusion if multiple hostnames resolve to the Keycloak instance. Low risk in a single-domain setup. |
 
-**Partially resolved (2026-03-18):** `KC_HOSTNAME` is now set to
+**Partially mitigated:** `KC_HOSTNAME` is set to
 `keycloak.infra.svc.cluster.local` in `values.yaml`, pinning the issuer URL for
 JWT validation. `KC_HOSTNAME_STRICT` remains `false` — tightening to `true`
 is deferred to the production values file (H2).
 
 ---
 
-### L5 · Keycloak NetworkPolicy Allows Ports 80 and 8080
+### L5 · Keycloak NetworkPolicy Port Scope
 
 | | |
 |---|---|
 | **File** | `infra/k8s/network-policy/infra.yaml` — `allow-ingress-keycloak-from-register` |
-| **Finding** | Both port 80 (Service) and port 8080 (container/HBONE) are allowed. |
-| **Risk** | None — both are legitimate paths in ambient mode. Port 80 is the ClusterIP Service port; port 8080 is the direct container port used by HBONE. |
+| **Finding** | The policy allows only the container port 8080 (plus HBONE 15008). The ClusterIP Service port 80 never appears in NetworkPolicy — policies match the container port, and the YAML carries a comment stating this. |
+| **Risk** | None — the ingress surface is the single port Keycloak listens on. |
 
-**Proposed**: Add a clarifying comment in the YAML explaining why both ports are needed.
+**Proposed**: No action.
 
 ---
 

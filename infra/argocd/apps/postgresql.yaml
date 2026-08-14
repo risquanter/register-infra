@@ -10,6 +10,11 @@ metadata:
 spec:
   project: infra
   source:
+    # Vendor: Bitnami (VMware) — https://github.com/bitnami/charts
+    # Security disclosure: https://github.com/bitnami/charts/security/policy
+    # Pinned: 18.5.5 (exact targetRevision)
+    # Cooldown elapsed: pre-ADR baseline
+    # Approved: ADR-INFRA-012. Reviewed: 2026-07-05.
     repoURL: https://charts.bitnami.com/bitnami
     chart: postgresql
     targetRevision: "18.5.5"

@@ -56,7 +56,7 @@ spec:
             # This is the fail-closed posture required by the threat model.
             # Consequence: OPA must have ≥2 replicas + PDB (ADR-INFRA-002).
             failure_mode_deny: true
-            # Include the Authorization header so OPA receives the JWT.
+            # Forward up to 8KB of the request body to OPA in the CheckRequest.
             with_request_body:
               max_request_bytes: 8192
               allow_partial_message: true

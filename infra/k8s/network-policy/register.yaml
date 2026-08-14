@@ -303,8 +303,9 @@ spec:
 # traffic from the waypoint to port 8090. This CiliumNetworkPolicy covers
 # the plaintext kubelet probe path on port 8091.
 #
-# PeerAuthentication (register-probe-permissive) sets port 8091 PERMISSIVE
-# so ztunnel does not reject the plaintext probe at the mTLS layer.
+# Both ports are STRICT mTLS with no port-level exception: the kubelet probe
+# on 8091 passes under STRICT via ztunnel's probe handling plus this SNAT
+# CIDR allow (see peer-authentication.yaml and ADR-INFRA-004 §4).
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:

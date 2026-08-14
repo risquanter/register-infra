@@ -2,7 +2,7 @@
 
 > **Implementation note (2026-03-18):** Chainsaw and CI workflows are not yet
 > implemented. OPA unit tests + bats + conftest currently cover the assertions.
-> Tracked in [TODO.md](../../TODO.md) § Deferred.
+> Tracked in [TODO.md](../TODO.md) § Deferred.
 
 **Status:** Accepted  
 **Date:** 2026-03-05  

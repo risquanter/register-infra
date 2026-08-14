@@ -203,7 +203,7 @@ kubectl -n infra port-forward svc/spicedb 8080:8080 &
 # Apply schema from register repo (DO NOT copy schema.zed here — ADR-INFRA-011)
 zed schema write \
   --endpoint localhost:8080 \
-  --token "$(sops --decrypt infra/secrets/spicedb.enc.yaml | yq .stringData.spicedb-preshared-key)" \
+  --token "$(sops --decrypt infra/secrets/spicedb.enc.yaml | yq .stringData.preshared-key)" \
   < /path/to/register/infra/spicedb/schema.zed
 
 # Read current schema

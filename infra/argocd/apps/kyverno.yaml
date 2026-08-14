@@ -13,6 +13,11 @@ spec:
     # Upstream Kyverno Helm chart (CNCF Graduated).
     # Admission controller only — background/cleanup/reports controllers
     # disabled to minimise footprint (local dev cluster).
+    # Vendor: Kyverno (CNCF) — https://github.com/kyverno/kyverno
+    # Security disclosure: https://github.com/kyverno/kyverno/security/policy
+    # Pinned: 3.7.1 (exact targetRevision)
+    # Cooldown elapsed: pre-ADR baseline
+    # Approved: ADR-INFRA-012. Reviewed: 2026-07-05.
     repoURL: https://kyverno.github.io/kyverno/
     chart: kyverno
     targetRevision: "3.7.1"

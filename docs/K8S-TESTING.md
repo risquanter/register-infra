@@ -425,13 +425,28 @@ rationale.
 | `requestauthentication.rego` | `outputClaimToHeaders` maps `sub` → `x-user-id`; `audiences` set |
 | `peerauthentication.rego` | Mode must be STRICT; no port-level overrides weaken it |
 | `networkpolicy.rego` | `default-deny-all` covers Ingress + Egress; DNS egress allows UDP/53 + TCP/53 |
+| `ciliumnetworkpolicy.rego` | Healthcheck rules restrict the source to `169.254.7.127/32` (ztunnel SNAT) and expose exactly one port each; `fromEntities: world` is denied except for the ingress Gateway front door (gateway-name selector, port 443 only) |
+| `keycloak-realm.rego` | Production realm JSON: `directAccessGrantsEnabled` (ROPC) and `implicitFlowEnabled` must be false on every client; `sslRequired` must be `external` or `all`; warns when required realm roles are missing |
+| `kyvernopolicy.rego` | ClusterPolicy `failurePolicy` must be `Ignore`; `inject-seccomp-profile` must mutate `seccompProfile.type` to `RuntimeDefault` and be scoped to the `register` namespace |
 
-### 4.7 Regression suite: identity header security invariants (bats-core)
+### 4.7 Regression pipeline (`tests/run-regression.sh`)
 
-A [bats-core](https://github.com/bats-core/bats-core) test suite verifies the
-five defence layers that protect `x-user-id` from forgery against a **live
-cluster** (see [SECURITY-FLOW.md](SECURITY-FLOW.md),
-[ADR-INFRA-005](adr/ADR-INFRA-005.md)).
+`tests/run-regression.sh` runs the full regression pipeline in four phases
+(see [ADR-INFRA-005](adr/ADR-INFRA-005.md)):
+
+| Phase | What it runs | Cluster required? |
+|---|---|---|
+| **1. Conftest static analysis** | The policies in `tests/conftest/policy/` (§4.6) against the Istio, network-policy, and Kyverno manifests and the Keycloak production realm JSON | No |
+| **2. OPA unit tests** | `opa test` over `infra/helm/opa/policies/` and `tests/opa/` | No |
+| **3. Trivy scans** | 3a: `trivy config` on `infra/` (HIGH/CRITICAL; known exceptions KSV-0053, KSV-0056 filtered). 3b: `trivy k8s` compliance — PSS Baseline (hard gate) and NSA Hardening (one known exception) | 3a no, 3b yes |
+| **4. Bats live tests** | All eight suites in `tests/bats/` via `bats --tap tests/bats/` | Yes |
+
+Flags:
+
+- `--allow-skip` — skipped bats tests do not fail the run (feature branches)
+- `--static-only` — phases 1, 2, and 3a only (no cluster needed)
+- `--bats-only` — phase 4 only
+- `--no-trivy` — skip phase 3 entirely
 
 **When to run**: after every Istio or Cilium upgrade, after any change to
 `infra/k8s/istio/` or `infra/k8s/network-policy/`, and in CI against a live
@@ -454,7 +469,8 @@ INGRESS=https://register.example.com ./tests/run-regression.sh
 KEYCLOAK_TOKEN="eyJ..." ./tests/run-regression.sh
 ```
 
-The suite runs five groups of checks:
+Within phase 4, `header-security.bats` verifies the identity header defence
+layers (see [SECURITY-FLOW.md](SECURITY-FLOW.md)) in five groups:
 
 | Group | What it verifies | Cluster required? |
 |---|---|---|
@@ -596,7 +612,7 @@ You do not need all of this immediately. Add layers as the project matures.
 | Now (bootstrap) | `terraform fmt`, `terraform validate`, `helm lint`, `kubeconform` | Catch syntax errors immediately; zero setup cost |
 | Wave 1 (Istio live) | T2 + T3 curl checks, `kube-linter`, **regression suite** | Verify the security invariants that Wave 2 depends on |
 | Wave 2 (requirePresent) | T1 NetworkPolicy check, `cilium connectivity test` | T1 is a Wave 2 blocker per THREAT-CATALOG.md |
-| Wave 3 (SpiceDB) | Full CI pipeline + kuttl e2e tests | System is complex enough that automated end-to-end tests pay off |
+| Wave 3 (SpiceDB) | CI integration of the full pipeline (SpiceDB bats suites `spicedb.bats` + `spicedb-provisioning.bats` already exist and run in phase 4) | Automated end-to-end runs on every change; local coverage is already in place |
 | Pre-k8s upgrade | `pluto detect` on all manifests | Catch deprecated API versions before they break on the new cluster version |
 
 ---

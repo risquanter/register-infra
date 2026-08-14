@@ -13,7 +13,7 @@ spec:
   # ADR-INFRA-003: all apps reference a scoped project, not default.
   project: infra
   source:
-    # Local Helm chart — official authzed chart unavailable (ADR-INFRA-012).
+    # Local Helm chart — official authzed chart unavailable (ADR-INFRA-016).
     # Container image is the only external artifact (ghcr.io/authzed/spicedb).
     repoURL: git@github.com:risquanter/register-infra.git
     targetRevision: HEAD

@@ -707,8 +707,10 @@ ArgoCD will now discover and deploy these Applications automatically:
 | ArgoCD Application | What it deploys | Source |
 |---|---|---|
 | `namespaces` | Namespaces with Pod Security labels, mesh enrollment, LimitRanges | [infra/helm/namespaces/](../infra/helm/namespaces/) |
+| `kyverno` | Kyverno admission controller (wave 1, `kyverno` project, `kyverno` namespace) | Upstream Helm chart v3.7.1 (remote) |
 | `postgresql` | PostgreSQL database (StatefulSet) | Bitnami Helm chart (remote) |
 | `keycloak` | Keycloak identity provider | [infra/helm/keycloak/](../infra/helm/keycloak/) (local chart, `quay.io/keycloak/keycloak:26.0`) |
+| `spicedb` | SpiceDB authorization service (wave 3, `infra` project, `infra` namespace) | [infra/helm/spicedb/](../infra/helm/spicedb/) (local chart, `ghcr.io/authzed/spicedb`) |
 | `opa` | OPA ext_authz server (2 replicas + PDB) | [infra/helm/opa/](../infra/helm/opa/) |
 | `mesh-policy` | Istio auth, PeerAuthentication, NetworkPolicies, RBAC | [infra/k8s/](../infra/k8s/) |
 | `register` | Application Deployment + Image Updater config | [infra/helm/register/](../infra/helm/register/) |
@@ -766,7 +768,7 @@ rm -f kubeconfig.yaml
 
 > **Note:** Terraform state is currently stored locally. Migrate to an
 > S3-compatible backend when multi-operator or CI access is needed.
-> Tracked in [TODO.md](../TODO.md) § Phase 4.
+> Tracked in [TODO.md](TODO.md) § Phase 4.
 
 ---
 
@@ -807,7 +809,7 @@ Items marked **(prod only)** apply only when the production realm is active
 ### Known limitation: ztunnel + PostgreSQL liveness probes
 
 > **Note:** LimitRange does not cap total namespace resource consumption.
-> A ResourceQuota will complement it. Tracked in [TODO.md](../TODO.md) § Phase 3.
+> A ResourceQuota will complement it. Tracked in [TODO.md](TODO.md) § Phase 3.
 
 > **Resolved for the current stack.** The `infra` namespace is enrolled in the
 > mesh (`meshEnroll: true` in [values.yaml](../infra/helm/namespaces/values.yaml)).

@@ -2,7 +2,7 @@ apiVersion: v2
 name: spicedb
 description: >-
   Local Helm chart for SpiceDB — Zanzibar-style fine-grained authorization.
-  No official vendor Helm chart is available (ADR-INFRA-012).
+  No official vendor Helm chart is available (ADR-INFRA-016).
   Container image: ghcr.io/authzed/spicedb (authzed — primary vendor).
 type: application
 version: 0.1.0

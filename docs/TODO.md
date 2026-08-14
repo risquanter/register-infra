@@ -72,7 +72,7 @@
 
 ### Tests
 
-- [x] 6 bats test suites: header-security, health-probes, mtls-enforcement, network-isolation, opa-authz, pod-security
+- [x] 8 bats test suites: header-security, health-probes, mtls-enforcement, network-isolation, opa-authz, pod-security, spicedb, spicedb-provisioning
 - [x] 43 OPA unit tests (`tests/opa/allow_test.rego`, 313 lines)
 - [x] 8 conftest policies (structural validation of all K8s resource types)
 - [x] `run-regression.sh` runner script
@@ -95,7 +95,7 @@
 
 **§1 — Chart source** ✅
 - [x] Official authzed chart (`https://authzed.github.io/helm-charts`) returns HTTP 200 with HTML — no `index.yaml` served, chart does not exist as a usable registry (confirmed 2026-07-05)
-- [x] Community chart (`pschichtel/spicedb`) rejected unconditionally — not the primary vendor org (ADR-INFRA-012 §3)
+- [x] Community chart (`pschichtel/spicedb`) rejected unconditionally — not the primary vendor org (ADR-INFRA-016 §3)
 - [x] **Decision: local Helm chart** under `infra/helm/spicedb/` — same pattern as Keycloak, OPA, register, irmin. Container image (`ghcr.io/authzed/spicedb`) is the only external artifact.
 
 **§2 — AppProject extension** ✅
@@ -132,6 +132,7 @@
     namespace: infra
   stringData:
     preshared-key: "<random ≥32 chars>"
+    db-password: "<spicedb_user password — same value as in datastore-uri>"
     datastore-uri: "postgresql://spicedb_user:<password>@postgresql.infra.svc.cluster.local:5432/spicedb"
   ```
   - Generate preshared key: `openssl rand -hex 32`
