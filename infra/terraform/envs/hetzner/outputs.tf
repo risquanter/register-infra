@@ -10,7 +10,7 @@ output "node_ipv6" {
 
 output "kubeconfig_path" {
   description = "Local path to the generated kubeconfig. Set KUBECONFIG to this value after apply."
-  value       = "${path.root}/kubeconfig.yaml"
+  value       = local.kubeconfig_path
   sensitive   = true
 }
 

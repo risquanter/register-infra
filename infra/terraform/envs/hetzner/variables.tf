@@ -32,6 +32,8 @@ variable "k3s_version" {
   default     = "v1.30.0+k3s1"
 }
 
+# ── Platform chart versions (passed through to the platform module) ───────────
+
 variable "cilium_version" {
   description = "Cilium Helm chart version."
   type        = string
