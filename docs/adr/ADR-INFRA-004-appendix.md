@@ -214,7 +214,7 @@ are deployed.
 | Keycloak (JWT issuer) | ✅ | ✅ | ✅ |
 
 "k3d (target)" reflects the decision in ADR-INFRA-004 §3: waypoint deployed
-locally as one of the final LOCAL-K3D-BOOTSTRAP steps.
+as one of the final rollout steps (GITOPS-ROLLOUT §8), shared by both environments.
 
 ---
 

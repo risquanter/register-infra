@@ -1,3 +1,13 @@
+# SOPS creation rules — two-recipient model.
+# Every file under infra/secrets/ is encrypted to BOTH recipients; either
+# private key decrypts it. The public keys below are not secret.
+#
+#   - Primary: YubiKey PIV identity (on-chip, touch-to-use) — day-to-day encrypt/decrypt.
+#   - Backup:  offline age key (stored off-machine) — recovery only, never in a cluster.
+#
+# See docs/SECRETS-BOOTSTRAP.md for how these recipients are generated and used.
 creation_rules:
   - path_regex: infra/secrets/.*\.yaml$
-    age: age1vlvyzq58d3t94ttecf92pphhr7wx75353mvafeqdlhurda52f5lsu0dwlm
+    age: >-
+      age1yubikey1qfn5svgndezuxfseqmq0f68sw8qex7scxrkgzjdjdm86hm6nxfmj5d8a97h,
+      age1t92fpnhk4s9apje356hfsadsh2c8prspmy6jshqfwn3dxyzr73sqpp4ac3

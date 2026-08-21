@@ -59,7 +59,7 @@ env:
         key: register-db-password
 ```
 
-Password rotation: re-encrypt both SOPS files with the new password, commit, push. ArgoCD applies both Secrets. PostgreSQL `ALTER ROLE` and app restart happen on next sync.
+Password rotation: re-encrypt both SOPS files with the new password (`sops` edit, with a YubiKey touch), commit, push, then re-apply both Secrets manually (`sops -d <file> | kubectl apply -f -`) — ArgoCD does not decrypt SOPS files. PostgreSQL `ALTER ROLE` and app restart follow on the next sync/rollout.
 
 ---
 
@@ -141,4 +141,4 @@ env:
 - ADR-INFRA-004 §1 (both NetworkPolicy and PeerAuthentication required — defense-in-depth extends to credential isolation)
 - AUTHORIZATION-PLAN.md Phase K.3 (PostgreSQL on K8s — separate DBs/schemas)
 - IMPLEMENTATION-PLAN.md DP-9 (in-memory initially, PG follows cheleb patterns)
-- [K3S-GITOPS-BOOTSTRAP.md §1.6](../K3S-GITOPS-BOOTSTRAP.md) (implementation steps)
+- [SECRETS-BOOTSTRAP.md §5](../SECRETS-BOOTSTRAP.md#5-create-and-encrypt-the-secret-files) (per-namespace secret creation — implementation steps)
