@@ -85,7 +85,7 @@ Each finding has:
 
 | | |
 |---|---|
-| **File** | `infra/terraform/main.tf` lines 26-30 (commented-out S3 backend) |
+| **File** | `infra/terraform/envs/hetzner/versions.tf` (commented-out S3 backend) |
 | **Finding** | Terraform state is local. It contains the Hetzner API token, kubeconfig content, and full resource graph. A disk failure loses state; a laptop compromise exposes all infrastructure secrets. |
 | **Risk** | State loss → manual import of all Hetzner resources. State exposure → full cluster compromise. |
 
@@ -163,7 +163,7 @@ Each finding has:
 
 | | |
 |---|---|
-| **File** | `infra/terraform/main.tf` lines 270, 287 |
+| **File** | `infra/terraform/modules/platform/main.tf` (ArgoCD + Image Updater `insecure=true`) |
 | **Finding** | ArgoCD API server and Image Updater run with `insecure=true`, relying on ambient mesh ztunnel for TLS. If the `argocd` namespace is removed from the mesh, the API is exposed over plaintext. |
 | **Risk** | Silent TLS downgrade if mesh enrollment label is removed. ArgoCD API exposed without encryption on the node. |
 
@@ -199,7 +199,7 @@ viewer-write and non-admin-cache deny conditions flow through the allow decision
 
 | | |
 |---|---|
-| **File** | `infra/terraform/main.tf` line 135 |
+| **File** | `infra/terraform/envs/hetzner/main.tf` (`null_resource.kubeconfig`, `StrictHostKeyChecking=no`) |
 | **Finding** | SSH to the newly created Hetzner server disables host key verification. One-time bootstrap operation, mitigated by operator_cidr firewall rule. |
 | **Risk** | MITM during the ~90-second window after server creation. Attacker would need to be on the operator's network path to Hetzner. |
 

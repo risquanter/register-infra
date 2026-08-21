@@ -457,18 +457,22 @@ secret before syncing the register app: `sops --decrypt infra/secrets/spicedb-re
 
 ## ✅ DECIDED — Multi-Environment Values Overlay (ADR-INFRA-014; implement before Phase 4b)
 
-> **Status: decided 2026-07-08, not yet implemented.** Full reasoning and rejected
-> alternatives in [ADR-INFRA-014](adr/ADR-INFRA-014.md). Surfaced 2026-07-06 while
-> investigating the `register-server` image-tag drift bug — not part of the original
-> AUTH-PLAN/Phase rollout.
+> **Status: decided 2026-07-08. Helm value overlays (image.repository + Keycloak realm)
+> implemented; the raw-manifest `infra/k8s/` split and the per-cluster ArgoCD instances are
+> still pending.** Full reasoning and rejected alternatives in
+> [ADR-INFRA-014](adr/ADR-INFRA-014.md). Surfaced 2026-07-06 while investigating the
+> `register-server` image-tag drift bug — not part of the original AUTH-PLAN/Phase rollout.
 
-**The problem:** every Helm chart with environment-specific values (`register`, `keycloak`,
-and eventually `spicedb`) currently has exactly **one** `values.yaml`, hand-edited in place
-to hold whatever the current target environment needs (e.g. Keycloak's
-`realmFile: "realms/register-realm-dev.json"`, register's `image.pullPolicy: Never`). This
-is the same anti-pattern that produced the `register-server:prod`/`local/register-server:dev`
-drift: nothing forces the "flip this value when you change environments" step, so it silently
-doesn't happen.
+**The problem:** a Helm chart with environment-specific values held in a single `values.yaml`,
+hand-edited in place per target environment, drifts silently — nothing forces the "flip this
+value when you change environments" step, which is the anti-pattern that produced the earlier
+`register-server` image-tag drift. The image-repo axis (`image.repository` local-registry ↔
+GHCR) is its own overlay pair `values-localreg.yaml`/`values-ghcr.yaml` on the home-built
+charts, **decoupled from the cluster** (ADR-INFRA-014 amendment 2026-08-21); the Keycloak
+realm (dev ↔ prod) is a separate cluster overlay `values-local.yaml`/`values-hetzner.yaml`.
+The remaining env-coupled value with no overlay yet is the cert-manager
+ClusterIssuer — self-signed for local vs ACME for Hetzner — which lives in the shared
+`infra/k8s/` path and needs the raw-manifest split below.
 
 **The candidate fix:** split each affected chart's values into a shared base (`values.yaml`)
 plus one overlay file per environment (`values-local.yaml`, `values-hetzner.yaml`), with a
@@ -511,9 +515,13 @@ be selectable per environment. Until resolved, Hetzner must not blindly sync the
 **Implementation checklist (not started):**
 - [ ] Split `infra/k8s/` into `shared/` (11 of today's 12 files) + `local/cert-manager/` +
   `hetzner/cert-manager/` (per ADR-INFRA-014 §3)
-- [ ] Convert `register`, `keycloak`, `frontend`, `irmin` charts to `values.yaml` +
-  `values-local.yaml` (extract today's local-only settings) — `values-hetzner.yaml` follows
-  once Hetzner specifics are known (Phase 4)
+- [x] Convert the charts to `values.yaml` + overlays. Home-built charts (`register`,
+  `frontend`, `irmin`) use the **image-repo** overlay `values-localreg.yaml` /
+  `values-ghcr.yaml` (`image.repository` local-registry ↔ GHCR, plus `ghcr-pull`), decoupled
+  from the cluster (ADR-INFRA-014 amendment). `keycloak` uses the **cluster** overlay
+  `values-local.yaml` / `values-hetzner.yaml` (realm dev ↔ prod). The shared `values.yaml`
+  keeps `image.tag`/`pullPolicy`. Still to fold into a cluster overlay: register's ingress
+  host and the cert issuer (self-signed ↔ ACME) once settled (Phase 4b)
 - [ ] Bootstrap Hetzner's own ArgoCD instance (Phase 4a) — see "Bootstrap doc restructure"
   housekeeping item for the shared platform-bootstrap doc this should follow
 - [ ] Update `infra/argocd/apps/mesh-policy.yaml` to multi-source (`infra/k8s/shared` +
@@ -625,9 +633,15 @@ for hardening register-server against compromise in the first place.
   leaves it (ADR-INFRA-011's explicit reasoning for rejecting the "export kubeconfig to GH
   Secrets" alternative).
 - [ ] Runner NetworkPolicy (scoped egress to `spicedb:50051` for `zed` CLI gRPC)
-- [ ] YubiKey dual-recipient SOPS (add second recipient to `.sops.yaml` + re-encrypt all secrets)
-  — you already have a YubiKey provisioned for GitHub read/write; confirm it's usable as an
-  `age-plugin-yubikey` SOPS recipient alongside `sops-age-key` (see `SOPS-YUBIKEY-MODEL.md`)
+- [x] ~~YubiKey dual-recipient SOPS~~ **superseded 2026-08-17** — pulled forward and
+  redefined. The model is now **two-recipient** (primary YubiKey + **offline backup** age
+  key), applied **manually** (`sops -d | kubectl apply`); there is no software cluster key
+  and no ArgoCD SOPS plugin. Docs done (`SECRETS-BOOTSTRAP.md`, `SOPS-YUBIKEY-MODEL.md`
+  rewritten). **Remaining operational steps are hardware-bound** and tracked in the
+  cluster-bring-up checklist (not this file): harden PIV PIN/PUK, install
+  `age-plugin-yubikey`, generate the on-chip identity + offline backup, write the real
+  two-recipient `.sops.yaml`, and recreate the four secrets under both recipients (the four
+  dead `*.enc.yaml` encrypted to the lost key were deleted).
 
 ### Phase 4b — DNS + real certificate (see Step 5 for the full plan)
 
@@ -710,18 +724,30 @@ for hardening register-server against compromise in the first place.
 
 ## Open — Housekeeping
 
-- [ ] **Bootstrap doc restructure (supersedes the "Hetzner doc parity" chore)** — the
-  bootstrap has three parts: ① provision a cluster (env-specific: k3d vs Terraform),
-  ② install the platform layer (Cilium → Istio ambient → cert-manager → ArgoCD +
-  ambient accommodations → SOPS secrets → repo → waypoint — **identical** across envs),
-  ③ GitOps rollout (root app-of-apps — **identical**). Today ②+③ are duplicated in
-  `LOCAL-K3D-BOOTSTRAP.md` and `K3S-GITOPS-BOOTSTRAP.md`, which is why they drift (local
-  got the ArgoCD-ambient + kube-proxy fixes; Hetzner didn't). Restructure into **one
-  shared "platform bootstrap + GitOps rollout" doc + two thin "provision a cluster"
-  prefixes**, with a short "environment differences" table (cert issuer self-signed↔ACME,
-  `secrets-encryption`, `KC_HOSTNAME_STRICT`, realm dev/prod, image build vs registry pull).
-  Land it **with** the Multi-Environment Values Overlay decision — same "shared vs per-env"
-  problem. Doc-only (no teardown needed).
+- [x] **Bootstrap doc restructure** — **done.** As-built shape: two bootstrap tracks reach a
+  shared **Platform Ready** cut-off, then hand off to shared docs. The platform install is
+  mechanism-divergent (k3d CLI by hand vs Terraform Helm provider), so each track keeps its
+  own install steps: `MANUAL-BOOTSTRAP.md` (local k3d) and `TERRAFORM-BOOTSTRAP.md`
+  (Hetzner). Platform Ready is **defined once** as the precondition section of
+  `GITOPS-ROLLOUT.md` (a state to verify, not a separate doc). Everything from Platform Ready
+  onward is shared: `SECRETS-BOOTSTRAP.md` → `GITOPS-ROLLOUT.md`, with the repetitive image
+  build → push → rollout loop in `IMAGE-DEPLOY.md`. The ArgoCD ambient accommodations live
+  once in `GITOPS-ROLLOUT.md §1`; environment differences in `GITOPS-ROLLOUT.md § Environment
+  differences`.
+- [ ] **Multi-Environment Values Overlay** — the image-repo axis and Keycloak's realm are DONE
+  (ADR-INFRA-014, amended 2026-08-21 to decouple the image repo from the cluster): the
+  home-built `register`/`irmin`/`frontend` charts have the image-repo overlay
+  `values-localreg.yaml` + `values-ghcr.yaml` (`image.repository` local k3d registry ↔
+  `ghcr.io/risquanter/*`, plus the `ghcr-pull` imagePullSecret), independent of the cluster;
+  `keycloak` has the cluster overlay `values-local.yaml` + `values-hetzner.yaml` (realm file
+  dev ↔ prod). The shared `values.yaml` keeps `image.tag` and `pullPolicy: IfNotPresent`. The
+  ArgoCD Applications layer `values-localreg.yaml` by default (swap to `values-ghcr.yaml` for
+  the GHCR points).
+  **Still to fold into the same overlays:** register's ingress host
+  (needs a settled local host convention), the cert issuer self-signed↔ACME (the
+  `infra/k8s/shared`+`local`+`hetzner` raw-manifest split, still not started), and the
+  production Keycloak hardening (`start` not `start-dev`, `KC_HOSTNAME_STRICT=true`).
+  Code change (not doc-only).
 - [ ] **Observability namespace**: `infra/helm/namespaces/values.yaml` declares an `observability` namespace with no ArgoCD app, no ADR, and no workloads. Review `docs/` and the `register` repo docs to determine scope, then either remove it (YAGNI) or link it to a concrete ADR and deployment plan. Input from register docs: the app exports OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`, default `localhost:4317`) and Wave 3 adds `authz.check.total` / `authz.check.latency_ms` metrics — an OTel collector + backend would give the SpiceDB rollout observability from day one.
 - [ ] **Cross-repo status alignment**: done 2026-07-04; re-run 2026-07-05 against code (found AUTH-PHASES.md stale); **re-run 2026-07-06 — all three flagged app-side blockers confirmed resolved in code** (`register.spicedb` block, `BootstrapProvisionerSpiceDB`, server-it T-S1–T-S10), and AUTH-PHASES.md itself has since been refreshed to match (`85ebbd9`). **No app-side code blocker remains on the L2 critical path** — only an image deploy. Next re-run trigger: register image deployed to cluster (then re-verify Step 2 §auth-mode-switch status codes and Step 4 BATS suites live).
 

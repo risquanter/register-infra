@@ -1,6 +1,8 @@
 # Testing Infrastructure
 
-> Security-aware regression pipeline for the register-infra platform.
+> Two parts: the **security-aware regression pipeline** (the authoritative suite,
+> below) and the **by-hand validation toolbox** (extra dev-time checks — see
+> [By-hand validation toolbox](#by-hand-validation-toolbox-no-cluster)).
 
 ## Overview
 
@@ -237,7 +239,7 @@ Some bats tests skip gracefully when prerequisites are missing:
 
 | Condition | Affected Tests | Resolution |
 |-----------|----------------|------------|
-| No waypoint deployed | header-security Groups 1–3, opa-authz Groups 3–6 | Deploy waypoint (LOCAL-K3D-BOOTSTRAP §9–11) |
+| No waypoint deployed | header-security Groups 1–3, opa-authz Groups 3–6 | Deploy waypoint (GITOPS-ROLLOUT §8–11) |
 | Ingress unreachable | All HTTP-based tests | Configure ingress + port mapping |
 | No Keycloak token | Authenticated request tests (Groups 3, 5, 6) | Set `KEYCLOAK_TOKEN` or configure test user |
 | istioctl not found | ztunnel/proxy checks (3.4, 3.5 in mtls-enforcement) | Install istioctl |
@@ -259,7 +261,8 @@ against the local k3d cluster. The layers build on each other:
 > **Prerequisites:** local k3d cluster running with all ArgoCD apps
 > synced, waypoint deployed (`istioctl waypoint apply -n register
 > --enroll-namespace`), and Keycloak realm provisioned with test users.
-> See [LOCAL-K3D-BOOTSTRAP.md](LOCAL-K3D-BOOTSTRAP.md) §1–§11.
+> See [MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md) (cluster + platform) then
+> [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md) §8–§11 (waypoint, Keycloak, auth tests).
 
 ### Setup: port-forwards
 
@@ -452,6 +455,81 @@ Run all automated tests: `./tests/run-regression.sh`
 
 ---
 
+## By-hand validation toolbox (no cluster)
+
+The regression pipeline above is the authoritative security suite. Alongside it, a
+few extra tools are useful while developing — they catch schema, lint, and
+deprecated-API problems the pipeline does not, and all run without a cluster. They
+are optional and not part of `run-regression.sh`.
+
+**Extra tools** (one-time install; none require a cluster):
+
+| Tool | What it checks |
+|---|---|
+| `tflint` | Provider-specific Terraform mistakes (e.g. a Hetzner instance type that does not exist) |
+| `kubeconform` | Rendered manifests against the real Kubernetes API schemas (catches typo'd field names) |
+| `kube-linter` | Manifest security best practices (missing limits, root containers, missing probes) |
+| `pluto` | Deprecated Kubernetes API versions — run before a cluster upgrade |
+
+### Layer 1 — Terraform static (per env root)
+
+Each env root is a separate Terraform root, so run these in whichever one you are
+changing (`envs/local` or `envs/hetzner`):
+
+```bash
+cd infra/terraform/envs/local        # or envs/hetzner
+terraform fmt -check -recursive       # formatting (also enforced in CI)
+terraform init -backend=false
+terraform validate                    # syntax + references resolve
+tflint                                 # provider-specific rules
+trivy config .                         # security misconfigurations
+```
+
+`trivy config infra/` (from the repo root) scans the whole tree, both env roots
+and the platform module, in one pass — this is what Phase 3a runs.
+
+### Layer 2 — Helm chart lint + render
+
+```bash
+# structure lint — all charts
+for c in register irmin frontend keycloak namespaces opa spicedb; do helm lint infra/helm/$c/; done
+
+# render + schema-validate a home-built chart on each image-repo overlay
+helm template register infra/helm/register/ \
+  -f infra/helm/register/values.yaml -f infra/helm/register/values-localreg.yaml \
+  | kubeconform -strict -summary -ignore-missing-schemas
+helm template register infra/helm/register/ \
+  -f infra/helm/register/values.yaml -f infra/helm/register/values-ghcr.yaml \
+  | kubeconform -strict -summary -ignore-missing-schemas
+
+# security best-practice + deprecated-API checks
+helm template register infra/helm/register/ | kube-linter lint -
+helm template register infra/helm/register/ | pluto detect -
+```
+
+### Layer 3 — Raw manifest validation
+
+Manifests in `infra/k8s/` are applied by ArgoCD without Helm rendering:
+
+```bash
+kubeconform -strict -summary -ignore-missing-schemas infra/k8s/
+kube-linter lint infra/k8s/
+pluto detect-files -d infra/k8s/
+```
+
+### When to add each check
+
+You do not need all of this at once — add layers as the work warrants:
+
+| Situation | Add |
+|---|---|
+| Any Terraform change | `terraform fmt`, `terraform validate` on the changed env root |
+| Any Helm/manifest change | `helm lint`, `kubeconform` on the changed chart/manifests |
+| Editing Istio/network policy | the **regression pipeline** (`run-regression.sh`) — it owns the security invariants |
+| Before a cluster Kubernetes upgrade | `pluto detect` across all manifests |
+
+---
+
 ## CI Integration
 
 ### Design Principles
@@ -468,10 +546,18 @@ dependencies. Every phase produces machine-parseable output:
 
 ### GitHub Actions
 
+The repo's live workflows are `.github/workflows/terraform-plan.yaml` and
+`terraform-apply.yaml` (Terraform against `envs/hetzner`). They are the reference
+for how Actions are pinned here: **every action is pinned to a full commit SHA**
+with the version in a trailing comment (ADR-INFRA-012), not a mutable tag. There
+is not yet a workflow that runs this regression pipeline; the structure below is a
+starting point for one — pin every `uses:` to a SHA when you add it.
+
 No third-party or single-maintainer Actions are required. The pipeline
 runs entirely via `run:` steps with official tool binaries.
 
-**Minimal workflow structure** (not a complete workflow — adapt to your repo):
+**Minimal workflow structure** (not a complete workflow — adapt to your repo; the
+`actions/checkout` tag below is illustrative, SHA-pin it in a real workflow):
 
 ```yaml
 jobs:

@@ -32,6 +32,8 @@ infra/helm/<workload>/
     ...
 ```
 
+**Scope — every chart, whichever tool installs it.** This policy governs every Helm chart rendered into the cluster, regardless of the installer: an ArgoCD Application syncing a workload, or the Terraform Helm provider installing the bootstrap platform layer (`infra/terraform/modules/platform/`). Workloads default to a local chart as above. The bootstrap platform layer — Cilium, Istio, cert-manager, ArgoCD itself, and ArgoCD Image Updater — is installed by Terraform from official vendor charts under the §2 exception: they are published by the software's own project, carry CRD/DaemonSet/controller trees too large to reproduce locally, and are pinned by exact chart version in `infra/terraform/modules/platform/variables.tf`. Each is recorded in the approved-upstream registry (ADR-INFRA-012 §7).
+
 ### 2. Official Vendor Chart as Named Exception
 
 An upstream Helm chart may be used **only** when all three conditions are met:
@@ -40,14 +42,26 @@ An upstream Helm chart may be used **only** when all three conditions are met:
 |---|---|
 | **Official maintainer** | The chart repository is owned and published by the software's primary vendor organisation — the same entity that publishes the container image and signs releases. Community forks, mirrors, and individual-maintained charts do not qualify regardless of popularity or version coverage. |
 | **Accessible and pinned** | The chart repository URL resolves and returns a valid `index.yaml`. The chart version is pinned to an exact `targetRevision` — never a range or `latest`. |
-| **Documented rationale** | The ArgoCD Application manifest includes a comment stating the vendor org, why a local chart is not preferred, and the date the decision was reviewed. |
+| **Documented rationale** | The consuming manifest documents the vendor org, why a local chart is not preferred, and the date the decision was reviewed — a comment in the ArgoCD Application for a workload, or the registry entry (ADR-INFRA-012 §7) plus the exact-version pin in `variables.tf` for a Terraform-installed platform chart. |
 
 The authoritative registry of approved upstream charts is the table in ADR-INFRA-012 §7; any new upstream chart requires a new entry there before it may be added. Rationale for the current entries:
+
+ArgoCD-applied workloads:
 
 | Chart | Vendor repo | Rationale |
 |---|---|---|
 | `bitnami/postgresql` | `https://charts.bitnami.com/bitnami` | Bitnami is the authoritative chart publisher for this image; chart complexity (StatefulSet, PVC, initdb, PDB, metrics) exceeds cost of local replication |
 | `kyverno/kyverno` | `https://kyverno.github.io/kyverno/` | CNCF-graduated project; chart publisher is the primary maintainer org; CRD count (22) makes local chart maintenance impractical |
+
+Terraform-installed platform charts (bootstrap layer):
+
+| Chart | Vendor repo | Rationale |
+|---|---|---|
+| `cilium/cilium` | `https://helm.cilium.io` | Official Cilium project chart; eBPF DaemonSet + CRDs + operator make local replication impractical |
+| `istio` (base·cni·ztunnel·istiod) | `https://istio-release.storage.googleapis.com/charts` | Official Istio project charts; four coordinated releases installed in order, large CRD set |
+| `jetstack/cert-manager` | `https://charts.jetstack.io` | Jetstack maintains cert-manager; CRD-heavy controller, chart also installs the CRDs |
+| `argoproj/argo-cd` | `https://argoproj.github.io/argo-helm` | Argo project's official chart; installs the GitOps controller itself, before any ArgoCD Application exists |
+| `argoproj/argocd-image-updater` | `https://argoproj.github.io/argo-helm` | Argo project's official chart; companion controller to argo-cd |
 
 ### 3. No Community Charts, Ever
 
@@ -140,6 +154,7 @@ targetRevision: "18.5.5"
 | `infra/argocd/apps/postgresql.yaml` | Approved upstream with rationale comment |
 | `infra/argocd/apps/kyverno.yaml` | Approved upstream with rationale comment |
 | `infra/argocd/apps/spicedb.yaml` | Local chart — official chart unavailable |
+| `infra/terraform/modules/platform/main.tf` | Approved upstream platform charts — Terraform-installed, pinned in `modules/platform/variables.tf`, recorded in ADR-INFRA-012 §7 |
 
 ---
 

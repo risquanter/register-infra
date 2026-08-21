@@ -37,7 +37,7 @@ namespaces:
     # LimitRange: default resource requests/limits for pods without explicit specs.
     # These are soft guardrails — pods that declare their own resources override them.
     # TODO: migrate to ResourceQuota for hard namespace-level caps once resource
-    # usage is understood via kubectl top (see K3S-GITOPS-BOOTSTRAP.md).
+    # usage is understood via kubectl top (see docs/TODO.md § Phase 3).
     limitRange:
       defaultCpu: 500m
       defaultMemory: 512Mi

@@ -5,12 +5,17 @@ covers everything managed by ArgoCD after bootstrap completes — it is the
 same regardless of whether your cluster is a local k3d instance or a Hetzner
 Cloud VM.
 
-- **Bootstrap guides** create the cluster and platform layer:
-  [LOCAL-K3D-BOOTSTRAP.md](LOCAL-K3D-BOOTSTRAP.md) (local dev) or
-  [K3S-GITOPS-BOOTSTRAP.md](K3S-GITOPS-BOOTSTRAP.md) (Hetzner production)
+- **Bootstrap tracks** reach [Platform Ready](GITOPS-ROLLOUT.md#platform-ready--the-precondition)
+  — the cluster and platform layer: [MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md)
+  (local k3d, by hand) or [TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md) (Hetzner,
+  Terraform)
+- **Shared bootstrap steps** (both tracks hand off to these at Platform Ready):
+  [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md) then
+  [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md); application images via
+  [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md)
 - **This document** explains what ArgoCD manages, how to make changes, and
   how to troubleshoot the GitOps layer
-- **Testing** is covered in [K8S-TESTING.md](K8S-TESTING.md)
+- **Testing** is covered in [TESTING.md](TESTING.md)
 - **Security architecture** is diagrammed in [SECURITY-FLOW.md](SECURITY-FLOW.md)
 
 ---
@@ -23,11 +28,15 @@ Cloud VM.
 
 ```
 infra/
-  terraform/                    # VM provisioning + bootstrap Helm releases
-    main.tf                     #   all Terraform resources (network, firewall, VM, Helm)
-    variables.tf                #   input variables with defaults
-    outputs.tf                  #   output values (server IP etc.)
-    cloud-init.yaml             #   first-boot script: installs k3s
+  terraform/                    # cluster provisioning + bootstrap Helm releases
+    modules/
+      platform/                 #   shared Helm layer (Cilium, Istio, cert-manager,
+                                #     ArgoCD, Image Updater) — target-independent
+    envs/
+      local/                    #   local k3d cluster + optional local registry
+      hetzner/                  #   Hetzner VM (network, firewall, cloud-init)
+                                #     each env root: main.tf, variables.tf,
+                                #     outputs.tf, versions.tf, own state + lock
   helm/
     register/                   # application Helm chart
       Chart.yaml
@@ -170,6 +179,70 @@ tests/
 
 ---
 
+## Platform components — what each layer is, and why
+
+The platform is the set of components a bootstrap track installs to reach
+Platform Ready. Both tracks install the same components in the same order — the
+[MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md) track by hand, the
+[TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md) track via
+`infra/terraform/modules/platform`. This is the single description of what each
+one is and why it is configured the way it is; the bootstrap guides give the
+commands and link here for the rationale.
+
+Read bottom to top — each layer needs the one beneath it, which is why the install
+order is fixed.
+
+1. **k3s — the Kubernetes API.** A small single-binary Kubernetes distribution.
+   It is installed *without* its default networking and ingress (flannel,
+   network-policy controller, traefik all disabled) because the next layers
+   replace them. On k3d these are `--k3s-arg` flags; on Hetzner they are
+   cloud-init config. At the end there is a running API but pods cannot yet get
+   network addresses.
+
+2. **Cilium — the network (CNI).** Pods get IP addresses and routes from a CNI
+   (Container Network Interface) plugin. k3s ships flannel, which cannot enforce
+   NetworkPolicy; Cilium replaces it using eBPF for both networking and policy.
+   Installed first because every later component runs as pods that need
+   networking. **`cni.exclusive=false` is mandatory** — Istio ambient installs
+   its own CNI plugin (istio-cni) alongside Cilium, so Cilium must not claim sole
+   ownership. `operator.replicas=1` suits a single node.
+
+3. **Istio ambient — the service mesh (mTLS + L7 policy).** Encrypts pod-to-pod
+   traffic with mutual TLS and enforces identity-based authorization without a
+   proxy container in every pod ("ambient" = sidecar-less). Four charts in a
+   required order: `base` (CRDs + cluster roles the mesh depends on) → `cni`
+   (istio-cni, `profile=ambient`) → `ztunnel` (per-node L4 proxy carrying the
+   mTLS tunnel) → `istiod` (control plane that configures ztunnel and issues each
+   pod its cryptographic identity). Out-of-order installation produces
+   "CRD not found" errors, so each release `depends_on` the previous.
+
+4. **cert-manager — TLS certificate lifecycle.** Issues and renews the TLS
+   certificates the ingress gateway serves. Installed with its own CRDs
+   (`Certificate`, `ClusterIssuer`) so later GitOps-managed manifests can
+   reference those types. Comes after the mesh (it is a normal workload that
+   benefits from mTLS) and before ArgoCD (its types must exist before ArgoCD syncs
+   manifests that use them). The issuer differs by cluster: self-signed locally,
+   ACME/Let's Encrypt on Hetzner.
+
+5. **ArgoCD — the GitOps controller, and the handoff point.** The last thing a
+   track installs. Once it is Running, everything above the platform is declared
+   in git and ArgoCD applies it — this is the bootstrap boundary.
+   **`server.insecure=true`** disables ArgoCD's own TLS listener; ztunnel provides
+   mTLS between ArgoCD pods once the `argocd` namespace is enrolled in the mesh (a
+   post-install step in [GITOPS-ROLLOUT.md §1](GITOPS-ROLLOUT.md#1-enroll-argocd-in-the-mesh)),
+   which makes ArgoCD's built-in TLS redundant.
+
+6. **ArgoCD Image Updater — the build→deploy loop.** Watches GHCR for new image
+   digests and commits the updated pin back to git, so ArgoCD then syncs it.
+   Installed with ArgoCD because it is part of the same GitOps machinery. Idle on
+   the local-registry image-repo point; active on the GHCR points.
+
+Every term above (CNI, service mesh, ztunnel, mTLS, CRD, GitOps, …) has a one-line
+definition in the [Glossary](#glossary). Chart sources and pinned versions are in
+[ADR-INFRA-012 §7](adr/ADR-INFRA-012.md) and set in the Terraform variables.
+
+---
+
 ## What ArgoCD manages
 
 ### AppProject scoping
@@ -301,7 +374,7 @@ git push (infra repo change)
 >   resources. ArgoCD will detect the "drift" (cluster differs from git) and
 >   revert your change.
 > - **Use branches and PRs** for changes. This gives you review, CI checks
->   (see [K8S-TESTING.md](K8S-TESTING.md)), and a git-based audit trail.
+>   (see [TESTING.md](TESTING.md)), and a git-based audit trail.
 > - **Commit small, focused changes**. One policy change per commit, not a
 >   bundle of unrelated edits. This makes rollback easier (`git revert`).
 > - **Enable branch protection** on `main`: require PR reviews, require CI
@@ -385,8 +458,8 @@ git push
 ### ArgoCD Application stuck at OutOfSync
 
 ```bash
-# Port-forward to ArgoCD (adjust port to match your bootstrap guide)
-kubectl -n argocd port-forward svc/argocd-server 8080:80 &
+# Port-forward to ArgoCD (9090 avoids the k3d loadbalancer on 8080/8443)
+kubectl -n argocd port-forward svc/argocd-server 9090:80 &
 PF_PID=$!
 sleep 3
 
@@ -486,6 +559,7 @@ before starting a bootstrap guide; revisit as needed.
 | **NetworkPolicy** | Firewall rules between pods. "Default deny" means all traffic is blocked unless explicitly allowed. |
 | **Service mesh** | Infrastructure layer managing service-to-service traffic. Provides mTLS, L7 policy, observability. Istio is our mesh. |
 | **mTLS** | Mutual TLS — both sides of a connection present certificates and encrypt traffic. Istio does this automatically. |
+| **cert-manager** | Kubernetes controller that issues and renews TLS certificates automatically, from an ACME provider (Let's Encrypt) or an internal issuer. Installed in the bootstrap platform layer; its `Certificate` and `ClusterIssuer` CRDs are installed with its chart. |
 | **ztunnel** | Istio ambient mode's L4 proxy. DaemonSet on every node. Encrypts all traffic between enrolled pods. Transparent — no sidecar. |
 | **Waypoint proxy** | Istio ambient mode's L7 proxy. Per-namespace Envoy instance for JWT validation and authorization policies. |
 | **Envoy** | High-performance proxy used by Istio. Handles connections, load balancing, policy enforcement. |
@@ -514,12 +588,15 @@ before starting a bootstrap guide; revisit as needed.
 | **Terraform** | IaC tool. Declares cloud resources (VMs, networks, firewalls). `terraform apply` creates them. Used in the Hetzner bootstrap. |
 | **Terraform state** | File tracking what Terraform has created. Required for updates and teardown. Loss requires manual cleanup. |
 | **cloud-init** | First-boot automation for VMs. Runs commands, writes files, installs packages on first start. |
+| **ArgoCD** | The GitOps controller. Continuously compares git (desired state) against the cluster (actual state) and applies the difference. Installed in the bootstrap platform layer; once it is running, all further cluster state is declared in git rather than applied by hand. |
+| **ArgoCD Image Updater** | Companion controller to ArgoCD. Polls GHCR for new image digests and commits the updated pin back to git, which ArgoCD then syncs — closing the build→deploy loop without a manual edit. |
+| **Application (ArgoCD)** | An ArgoCD CRD naming a git source (repo, path, revision) and a cluster destination. ArgoCD keeps the destination matching the source. |
 | **App of Apps** | ArgoCD pattern: one root Application points to a directory of child Application files. Adding a service = adding a file. |
 | **Reconciliation** | ArgoCD comparing git (desired) to cluster (actual) and applying differences. Runs every ~3 minutes. |
 | **Self-healing** | ArgoCD reverting manual cluster changes to match git. Prevents configuration drift. |
 | **Drift** | When cluster state diverges from git. ArgoCD detects and corrects drift automatically. |
 | **Helm chart** | Package of Kubernetes YAML templates + values. Like apt packages, but for Kubernetes. |
-| **SOPS** | Secrets OPerationS — encrypts/decrypts secret files. Values encrypted, keys visible for auditability. Used in production; local dev uses manual `kubectl create secret`. |
+| **SOPS** | Secrets OPerationS — encrypts/decrypts secret files. Values encrypted, keys visible for auditability. Both environments use SOPS; the operator applies decrypted Secrets by hand (`sops -d \| kubectl apply`), ArgoCD never decrypts. See [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md). |
 | **age** | Modern encryption tool. SOPS uses age keypairs for encrypting secret files (replaces GPG). |
 | **GHCR** | GitHub Container Registry — hosts Docker images. Image Updater polls it for new versions. |
 
@@ -529,7 +606,7 @@ before starting a bootstrap guide; revisit as needed.
 
 ### Tools on your workstation
 
-| Tool | What it does | Local dev | Hetzner production |
+| Tool | What it does | Local | Hetzner |
 |---|---|---|---|
 | **kubectl** | Kubernetes CLI — talks to the cluster API | All sections | All sections |
 | **Helm** | Kubernetes package manager — installs charts | Bootstrap only | Via Terraform |

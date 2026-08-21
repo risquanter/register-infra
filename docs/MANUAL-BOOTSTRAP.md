@@ -1,11 +1,29 @@
-# Local k3d Bootstrap — Development Cluster with GitOps
+# Manual Bootstrap — build the platform by hand (local)
 
-Local development cluster using k3d (k3s-in-Docker). Identical Kubernetes API
-to the Hetzner production path, but runs entirely on your machine.
+The **by-hand track**: install each platform component yourself with its own CLI,
+from first principles, on a k3d (k3s-in-Docker) cluster running entirely on your
+machine. It provisions the cluster and platform layer up to **Platform Ready** —
+the cut-off point where GitOps takes over — then hands off to the shared
+[SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md) and [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md).
+
+The other way to reach Platform Ready is the automated track,
+[TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md), which does the same steps with
+Terraform (on a local k3d cluster or a Hetzner VM). Both tracks are educational
+and both end at the same Platform Ready state, after which the secrets and rollout
+guides are identical. See [START-HERE.md](START-HERE.md) for the full map.
+
+This guide covers the local cluster. The image-repo choice is separate: point 1
+(local registry, §1.1 below) or point 2 (GHCR — skip §1.1 and follow the GHCR
+variant in [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md)). Both run on this same by-hand
+cluster.
 
 - **Target**: fresh Debian workstation, no cloud account needed
-- **Principle**: manually bootstrap the platform layer (k3d, Cilium, Istio, ArgoCD), then let GitOps manage everything above it
-- **Time**: ~30 minutes from a fresh Debian install to a working GitOps cluster
+- **Principle**: manually bootstrap the platform layer (k3d + registry, Cilium,
+  Istio, cert-manager, ArgoCD), then let GitOps manage everything above it
+- **End state**: [Platform Ready](GITOPS-ROLLOUT.md#platform-ready--the-precondition)
+  — the cut-off point defined in the rollout guide
+- **Versions**: every pinned version comes from the [Pinned versions](#pinned-versions)
+  table below — the single source in this track; no number is restated inline
 - **Security posture**: defence-in-depth from the start — even on localhost
 
 > **New to Kubernetes?** This guide explains every concept as it comes up.
@@ -18,64 +36,90 @@ to the Hetzner production path, but runs entirely on your machine.
 
 ## How this guide relates to the other docs
 
-| Document | Purpose | When to use |
-|---|---|---|
-| **This guide** | Local dev cluster on your machine | Now — first step |
-| [K3S-GITOPS-BOOTSTRAP.md](K3S-GITOPS-BOOTSTRAP.md) | Production deploy to Hetzner Cloud via Terraform | After local validation works |
-| [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Shared GitOps reference (ArgoCD apps, workflow, glossary) | After bootstrap completes |
-| [K8S-TESTING.md](K8S-TESTING.md) | Validation and CI pipeline | After cluster is running |
-| [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture | Reference during auth testing |
+Read in this order:
 
-The Hetzner GitOps guide is **Hetzner-specific** — it uses Terraform with the
-Hetzner Cloud provider, cloud-init, and Hetzner firewalls/networking. It remains
-the production deployment path. This guide replaces only the "how do I get a
-cluster" part. The GitOps layer (ArgoCD, App of Apps, Helm charts, policies) is
-identical and portable between both.
+| Order | Document | Purpose |
+|---|---|---|
+| **1 (this guide)** | Local dev cluster on your machine | Provision k3d (+ optional registry), install the platform, by hand → Platform Ready |
+| 2 | [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md) | Create + apply the SOPS/age/YubiKey secrets (shared) |
+| 3 | [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md) | Enroll ArgoCD, connect git, apply the root app, run tests (shared) |
+| — | [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md) | Build → push → rollout loop; the image-repo axis (local registry vs GHCR) |
+| ref | [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Platform component concepts, day-to-day GitOps workflow, repo layout, glossary |
+| ref | [TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md) | The automated track — the same platform via Terraform (local k3d or Hetzner VM) |
+| ref | [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture |
+
+Steps 2 and 3 are **shared** with the automated track — only this part (how you
+get a cluster and install the platform, by hand) is track-specific. Both tracks
+end at Platform Ready; everything in the GitOps layer (ArgoCD Applications, Helm
+charts, policies) is identical and portable between them.
+
+---
+
+## Pinned versions
+
+**The single source of versions for this track.** Every step below cites a row
+here; no version number is typed anywhere else in this guide. The automated track
+reads the same numbers from the `infra/terraform/envs/*/variables.tf` and
+`infra/terraform/modules/platform/variables.tf` defaults — keep them in sync when
+you bump a version.
+
+| Component | Version | Installed at |
+|---|---|---|
+| **k3s** | `v1.30.0+k3s1` (k3d `--image rancher/k3s:v1.30.0-k3s1`) | §1.2 |
+| **kubectl** (client) | `v1.31.0` (stay within ±1 minor of k3s) | §0.3 |
+| **Cilium** chart | `1.17.0` | §2 |
+| **Gateway API CRDs** | `v1.2.0` (standard channel) | §3.1 |
+| **Istio** (base, cni, ztunnel, istiod) | `1.25.0` | §0.7 / §3.2 |
+| **cert-manager** chart | `1.17.0` | §4 |
+| **ArgoCD** chart (argo/argo-cd) | `7.8.0` | §5 |
+| **ArgoCD Image Updater** chart | `0.11.0` | §5.1 |
 
 ---
 
 ## The bootstrap boundary
 
-This is the most important concept in this guide. There are exactly two layers
-in any GitOps-managed Kubernetes setup:
+This is the most important concept. There are exactly two layers in any
+GitOps-managed Kubernetes setup:
 
 1. **Bootstrap layer** — things you install by hand, because the automation
    engine (ArgoCD) does not exist yet. You run shell commands for this.
 2. **GitOps layer** — everything ArgoCD manages. You change these by editing
-   files in git and pushing. ArgoCD detects the change and applies it to the
-   cluster automatically.
+   files in git and pushing. ArgoCD detects the change and applies it.
 
-The boundary between them is the moment you apply the "root App-of-Apps" — the
-single ArgoCD Application that tells ArgoCD to watch your git repository.
+The boundary is the moment you apply the "root App-of-Apps" (in
+[GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md)).
 
 ```
-╔═══════════════════════════════════════════════════════════════╗
-║  GITOPS LAYER — ArgoCD manages these from your git repo      ║
-║                                                               ║
-║  Namespaces + Pod Security    ← infra/helm/namespaces/        ║
-║  PostgreSQL                   ← infra/argocd/apps/postgresql  ║
-║  Keycloak                     ← infra/argocd/apps/keycloak    ║
-║  Istio auth policies          ← infra/k8s/istio/              ║
-║  OPA policies                 ← infra/k8s/opa/                ║
-║  Network policies             ← infra/k8s/network-policy/     ║
-║  Register application         ← infra/helm/register/          ║
-║                                                               ║
-║  To change any of the above: edit file → commit → push        ║
-╠═══════════════════════════════════════════════════════════════╣
-║  BOOTSTRAP LAYER — manual, one-time                           ║
-║                                                               ║
-║  ① k3d cluster create                                         ║
-║  ② Cilium (CNI — pod networking)                              ║
-║  ③ Istio ambient (service mesh — mTLS + L7 policy)            ║
-║  ④ cert-manager (TLS certificate automation)                  ║
-║  ⑤ ArgoCD (GitOps engine)                                     ║
-║  ⑥ Secrets bootstrap (SOPS + age — same as production)        ║
-║  ⑦ Connect ArgoCD → git repo                                  ║
-║  ⑧ Apply root App-of-Apps     ← the handoff moment            ║
-║                                                               ║
-║  Done once. After ⑧, you stop running kubectl/helm manually.  ║
-╚═══════════════════════════════════════════════════════════════╝
+GITOPS LAYER — ArgoCD manages these from your git repo
+    Namespaces + Pod Security        ← infra/helm/namespaces/
+    PostgreSQL / Keycloak / SpiceDB  ← infra/argocd/apps/
+    Istio auth policies              ← infra/k8s/istio/
+    OPA policies                     ← infra/k8s/opa/
+    Network policies                 ← infra/k8s/network-policy/
+    Register application             ← infra/helm/register/
+    To change any of the above: edit file → commit → push
+────────────────────────────────────────────────────────────────
+BOOTSTRAP LAYER — manual, one-time
+
+  THIS GUIDE (each step builds toward Platform Ready):
+    ① k3d cluster create (+ local registry — point 1 only)
+    ② Cilium               (CNI — pod networking)
+    ③ Istio ambient        (service mesh — mTLS + L7 policy)
+    ④ cert-manager         (TLS certificate automation)
+    ⑤ ArgoCD + Image Updater (GitOps engine) — installed, pods Running
+    ────────────────────── ← PLATFORM READY (cut-off point → GITOPS-ROLLOUT.md)
+
+  SECRETS-BOOTSTRAP.md:  ⑥ SOPS + age + YubiKey secrets
+  GITOPS-ROLLOUT.md:     ⑦ mesh-enroll ArgoCD → root app  ← the handoff moment
+                         ⑧ images pushed to the registry (IMAGE-DEPLOY.md)
 ```
+
+---
+
+## Repository layout
+
+See [GITOPS-OPERATIONS.md — Repository layout](GITOPS-OPERATIONS.md#repository-layout)
+for the full annotated tree (kept in one place to avoid drift between guides).
 
 ---
 
@@ -245,7 +289,10 @@ cilium version --client
 
 ```bash
 # WHAT: download the Istio release bundle, extract the istioctl binary, clean up.
-curl -L https://istio.io/downloadIstio | sh -
+# The istioctl version determines the Istio control-plane version it installs in
+# §3, so pin it to the Istio row of the Pinned versions table.
+ISTIO_VERSION=1.25.0   # = Pinned versions table (Istio)
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION="$ISTIO_VERSION" sh -
 ISTIO_DIR=$(ls -d istio-*/ | head -n1)
 sudo install -m755 "${ISTIO_DIR}bin/istioctl" /usr/local/bin/istioctl
 rm -rf "$ISTIO_DIR"
@@ -259,9 +306,10 @@ istioctl version --remote=false
 > (for code review and auditability) without seeing the values. age is the
 > modern encryption backend SOPS uses (replacing GPG).
 >
-> Both the local and production guides use the same SOPS + age workflow.
-> This is intentional — the encrypted secret files in `infra/secrets/` are
-> the single source of truth for both environments.
+> Both the local and production guides use the same SOPS + age workflow. The
+> YubiKey plugin (`age-plugin-yubikey`) and the full secrets model are covered
+> in the shared [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md) — this step just
+> installs the two base binaries.
 
 ```bash
 # ── age ── modern encryption tool
@@ -328,11 +376,54 @@ argocd version --client
 > **Security note**: k3d does not support the `--secrets-encryption` flag that
 > bare k3s provides (etcd secret encryption at rest). This is acceptable for a
 > local dev cluster where the "etcd" data lives inside a Docker container on
-> your own machine. The production Hetzner guide enables this — see
-> [K3S-GITOPS-BOOTSTRAP.md](K3S-GITOPS-BOOTSTRAP.md).
+> your own machine. The Hetzner env of the automated track enables this — see the
+> [Platform Ready note on secret encryption](GITOPS-ROLLOUT.md#platform-ready--the-precondition)
+> and [TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md). It is the only at-rest
+> difference between the local and Hetzner clusters.
+>
+> **Automated-track equivalent**: `envs/local` creates this same k3d cluster via
+> Terraform; `envs/hetzner` is the Hetzner VM + `cloud-init.yaml` — see
+> [TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md).
+
+### 1.1 Create the local image registry — point 1 only
+
+> **Skip this section for point 2 (GHCR).** A local registry is meaningful only
+> when the image-repo axis is the local registry (point 1). For point 2 (GHCR on
+> this local cluster), do not create a registry: leave §1.2's `--registry-use`
+> flag out, and follow the GHCR variant in [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md).
+
+> **Why a registry?** The cluster pulls application images the same way in every
+> environment: from a registry, with `pullPolicy: IfNotPresent`. For point 1 that
+> registry is a k3d-managed container; for points 2 and 3 it is GHCR. Using a real
+> registry (rather than side-loading images into the node) means the image is
+> genuinely "in the registry" from the GitOps engine's point of view — the local
+> path mirrors the GHCR pull path exactly. The build → push → rollout loop, and
+> the image-repo axis, are in [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md).
 
 ```bash
+# WHAT: create a k3d-managed registry container, published on host port 5000.
+# k3d names the container k3d-registry.localhost and configures cluster nodes
+# to resolve that name to it.
+k3d registry create registry.localhost --port 5000
+
+# WHAT: make the SAME image reference resolve from the host too, so `docker push
+# k3d-registry.localhost:5000/...` reaches the published port. The cluster nodes
+# already resolve the name via k3d's injected registries config.
+grep -q 'k3d-registry.localhost' /etc/hosts \
+  || echo '127.0.0.1 k3d-registry.localhost' | sudo tee -a /etc/hosts
+```
+
+### 1.2 Create the cluster
+
+```bash
+# --image pins k3s to the Pinned versions table (k3s row), matching the
+#   Hetzner k3s version so both infra targets run the same Kubernetes.
+# --registry-use wires the cluster's nodes to the registry created in §1.1.
+#   POINT 2 (GHCR): omit the --registry-use line entirely — you did not create
+#   a local registry; apps pull from GHCR instead (IMAGE-DEPLOY.md, GHCR variant).
 k3d cluster create register-dev \
+  --image rancher/k3s:v1.30.0-k3s1 \
+  --registry-use k3d-registry.localhost:5000 \
   --k3s-arg "--flannel-backend=none@server:0" \
   --k3s-arg "--disable-network-policy@server:0" \
   --k3s-arg "--disable=traefik@server:0" \
@@ -365,6 +456,7 @@ kubectl get nodes
 > registering. Setting `exclusive=false` allows both to coexist.
 
 ```bash
+# --version: the Cilium row of the Pinned versions table.
 # operator.replicas=1: single-node cluster — one operator instance is sufficient.
 cilium install --version 1.17.0 \
   --set cni.exclusive=false \
@@ -377,6 +469,9 @@ cilium status --wait
 # VERIFICATION: the node should now show "Ready".
 kubectl get nodes
 ```
+
+> **Terraform equivalent**: `helm_release.cilium` in `infra/terraform/modules/platform/` (the automated track) — same
+> chart, same version variable, same `cni.exclusive=false` / `operator.replicas=1`.
 
 > **What just happened**: Cilium deployed several pods into `kube-system`:
 > - `cilium-agent` (DaemonSet) — runs on every node, programs eBPF rules
@@ -403,6 +498,7 @@ kubectl get nodes
 > before Istio's waypoint proxies can work.
 
 ```bash
+# v1.2.0 = the Gateway API CRDs row of the Pinned versions table.
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
 
 # VERIFICATION: confirm the CRDs are registered.
@@ -423,6 +519,7 @@ kubectl get crd httproutes.gateway.networking.k8s.io
 > mode avoids this — the ztunnel process on the node handles mTLS transparently.
 
 ```bash
+# Installs the Istio version of the istioctl binary — pinned to the table in §0.7.
 istioctl install -y --set profile=ambient
 
 # VERIFICATION: all Istio pods should be Running.
@@ -430,16 +527,21 @@ istioctl install -y --set profile=ambient
 kubectl -n istio-system get pods
 ```
 
+> **Terraform equivalent**: `helm_release.istio_base` → `istio_cni` → `ztunnel` →
+> `istiod` in `infra/terraform/modules/platform/` (the automated track) — the four charts `istioctl`
+> installs as one, each pinned to the same Istio version variable.
+
 > **mTLS is now active.** From this moment, ztunnel encrypts all traffic
 > between pods in mesh-enrolled namespaces using mutual TLS. This is
 > identical to what runs in production. There is no "dev mode" or "local
 > mode" — ztunnel does not know it is running inside Docker. The encryption,
 > certificate rotation, and SPIFFE identity assignment are all real.
 >
-> You can verify mTLS is working after workloads are deployed (§11 below
-> includes verification commands). The key test: `istioctl ztunnel-config
-> workloads` shows each pod's SPIFFE identity and whether its traffic is
-> `HBONE` (encrypted) or `NONE` (plaintext).
+> You verify mTLS after workloads are deployed —
+> [GITOPS-ROLLOUT.md §11](GITOPS-ROLLOUT.md#11-test-the-authentication-chain)
+> includes the checks. The key test: `istioctl ztunnel-config workloads` shows
+> each pod's SPIFFE identity and whether its traffic is `HBONE` (encrypted) or
+> `NONE` (plaintext).
 
 ---
 
@@ -449,10 +551,9 @@ kubectl -n istio-system get pods
 > requesting certificates, renewing them before expiry, and storing them as
 > Kubernetes Secrets. It is needed before any HTTPS ingress is configured.
 >
-> For local development, cert-manager is mostly a placeholder — you are
-> accessing services via `localhost` port-forwards. It becomes essential in
-> production where you need real TLS certificates from Let's Encrypt or
-> a private CA.
+> For local development, cert-manager issues from a **self-signed**
+> `ClusterIssuer`; production swaps in ACME/Let's Encrypt. The Gateway and
+> HTTPRoute are identical — only the issuer differs.
 
 ```bash
 # WHAT: add the Jetstack Helm repository (Jetstack maintains cert-manager).
@@ -460,1146 +561,169 @@ helm repo add jetstack https://charts.jetstack.io --force-update
 helm repo update
 
 # WHAT: install cert-manager into its own namespace.
+# --version: the cert-manager row of the Pinned versions table.
 # --set crds.enabled=true: installs the CRDs that cert-manager needs
 #   (Certificate, Issuer, ClusterIssuer etc.)
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace cert-manager \
   --create-namespace \
+  --version 1.17.0 \
   --set crds.enabled=true
 
 # VERIFICATION: wait for cert-manager to be fully running.
 kubectl -n cert-manager rollout status deploy/cert-manager --timeout=180s
 ```
 
+> **Terraform equivalent**: `helm_release.cert_manager` in `infra/terraform/modules/platform/` (the automated track).
+
 ---
 
 ## 5) Install ArgoCD
 
-> **What happens here**: We install ArgoCD as a Helm chart. After this, the
-> cluster has a GitOps engine, but it is not yet watching any repository.
-> Steps 6–8 connect it.
+> **What happens here**: install ArgoCD as a Helm chart. After this, the cluster
+> has a GitOps engine, but it is not yet meshed, and not yet watching any
+> repository — those are the first steps of
+> [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md).
 >
-> **Where ArgoCD lives and how it communicates**:
->
-> ArgoCD runs as **pods inside the cluster**, in the `argocd` namespace. It
-> is not an external service connecting from outside. It has four network
-> relationships:
+> **Where ArgoCD lives and how it communicates**: ArgoCD runs as **pods inside
+> the cluster**, in the `argocd` namespace. It has four network relationships:
 >
 > | Connection | From → To | Encryption |
 > |---|---|---|
-> | **You → ArgoCD UI/API** | Your terminal → `kubectl port-forward` → ArgoCD pod | k8s API server's own TLS encrypts the port-forward tunnel |
-> | **ArgoCD → GitHub** | ArgoCD repo-server → github.com | Standard HTTPS (ArgoCD is an HTTPS client) |
-> | **ArgoCD → k8s API** | ArgoCD controller → k8s API server | ServiceAccount token over the API server's own TLS |
-> | **ArgoCD internal** | server ↔ repo-server ↔ controller (pod-to-pod) | mTLS via ztunnel (after namespace enrollment below) |
+> | **You → ArgoCD UI/API** | terminal → `kubectl port-forward` → ArgoCD pod | k8s API server's TLS encrypts the tunnel |
+> | **ArgoCD → GitHub** | repo-server → github.com | Standard HTTPS |
+> | **ArgoCD → k8s API** | controller → k8s API server | ServiceAccount token over API server TLS |
+> | **ArgoCD internal** | server ↔ repo-server ↔ controller | mTLS via ztunnel (after mesh enrollment) |
 >
-> **ArgoCD is a high-value target — treat it accordingly.**
-> ArgoCD holds the SOPS age private key (can decrypt every secret in git),
-> the GitHub PAT (source code access), and its `application-controller` has
-> broad cluster-wide RBAC (it can create/delete resources in any namespace).
-> The `repo-server` component **executes arbitrary code**: it renders Helm
-> templates, runs Kustomize, and evaluates config-management plugins. A
-> supply-chain attack that poisons a Helm chart or git repo gets code
-> execution inside `repo-server`.
->
-> **Bootstrapping gap — ArgoCD starts outside the mesh.** The `helm install`
-> below creates the `argocd` namespace with `--create-namespace` before the
-> namespace chart or any ArgoCD Application exists. That namespace does not
-> yet have the `istio.io/dataplane-mode: ambient` label, so ztunnel does
-> not intercept ArgoCD's traffic. ArgoCD's internal pod-to-pod communication
-> (server ↔ repo-server ↔ controller) is **plaintext on the pod network**.
->
-> **This is a gap, not a design choice.** From a defense-in-depth / threat-
-> modeling perspective, leaving a component with this attack surface outside
-> the mesh is not acceptable — regardless of single-node vs. multi-node.
-> The threat model is not "who can sniff the physical wire" but "what
-> happens if a pod is compromised." A supply-chain attack (poisoned Helm
-> chart, malicious git hook, RCE in a config plugin) gives an attacker a
-> shell inside `repo-server`. Without the mesh, all three components talk
-> over the pod network in plaintext. From inside `repo-server`, the attacker
-> can:
->
-> - **Sniff controller traffic** — `application-controller` continuously
->   sends sync status and resource manifests to `argocd-server`. Plaintext
->   means the attacker reads every resource being applied to the cluster,
->   including Secrets that flow through sync.
-> - **Impersonate the controller** — without mTLS there are no cryptographic
->   identities. The attacker can send forged gRPC messages to `argocd-server`
->   (e.g. "mark this app as Synced" or "trigger a sync of a different app").
-> - **Harvest tokens** — `argocd-server` exchanges ServiceAccount tokens and
->   session credentials over these internal connections. Plaintext means those
->   are readable.
->
-> With the mesh enrolled (`kubectl label namespace argocd istio.io/dataplane-mode=ambient`):
->
-> - Every pod gets a SPIFFE certificate. The controller and server mutually
->   authenticate before any byte is exchanged.
-> - Even if `repo-server` is fully compromised, it cannot impersonate the
->   controller — it does not have the controller's private key.
-> - mTLS + mesh policy limits what a compromised `repo-server` can reach,
->   reducing blast radius from "own the whole cluster" to "own
->   `repo-server`'s own ServiceAccount permissions."
->
-> **The fix has two parts:**
->
-> 1. **Imperative (closes the bootstrap window):** The `kubectl label`
->    command below the `helm install` enrolls the namespace immediately.
->    Ztunnel is a **node-level DaemonSet**, not a sidecar — it watches
->    namespace labels via the Kubernetes API and dynamically updates its
->    eBPF/iptables interception rules. Already-running ArgoCD pods are
->    picked up without a restart. Existing gRPC connections between
->    controller ↔ repo-server may briefly reset; ArgoCD reconnects
->    automatically.
->
-> 2. **Declarative (prevents drift):** The `argocd` namespace is declared
->    in `infra/helm/namespaces/values.yaml` with `meshEnroll: true`. When
->    ArgoCD syncs the namespace chart for the first time (and every sync
->    after), it applies the Namespace resource with the ambient label.
->    ArgoCD's self-heal ensures the label cannot be removed without git
->    changing first — the mesh enrollment is under GitOps governance,
->    identical to every other namespace.
->
-> Part 1 closes the ~60-second window between `helm install` and ArgoCD's
-> first sync. Part 2 makes the enrollment permanent and drift-proof.
->
-> **Understanding `server.insecure=true`**: ArgoCD has a built-in option to
-> add TLS to its own HTTP listener (the web UI / API). Setting
-> `server.insecure=true` disables this. The word "insecure" is misleading —
-> it means "ArgoCD's own process does not do TLS", not "unencrypted to the
-> outside world". With ArgoCD now inside the mesh, ztunnel provides mTLS
-> between pods, so ArgoCD's own TLS listener would be redundant
-> double-encryption. Access from your machine is via `kubectl port-forward`,
-> which is encrypted by the k8s API server's own TLS.
+> **Understanding `server.insecure=true`**: this disables ArgoCD's own HTTP-listener
+> TLS. The word "insecure" is misleading — it means "ArgoCD's own process does
+> not do TLS", not "unencrypted to the outside world". Once ArgoCD is inside the
+> mesh, ztunnel provides mTLS between pods, so ArgoCD's own TLS listener would be
+> redundant. Access from your machine is via `kubectl port-forward`, encrypted by
+> the k8s API server's own TLS.
 
 ```bash
 helm repo add argo https://argoproj.github.io/argo-helm --force-update
 helm repo update
 
+# --version: the ArgoCD row of the Pinned versions table.
 helm upgrade --install argocd argo/argo-cd \
   --namespace argocd \
   --create-namespace \
+  --version 7.8.0 \
   --set configs.params."server\.insecure"=true \
   --set server.service.type=ClusterIP
 
-# VERIFICATION: wait for all three core ArgoCD components.
+# VERIFICATION: wait for the three core ArgoCD components.
 # - argocd-server: the API + web UI
 # - argocd-repo-server: clones git repos and renders Helm charts
-# - argocd-application-controller: watches for changes and syncs
+# - argocd-application-controller: watches for changes and syncs (a StatefulSet)
 kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
 kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=180s
-# application-controller is a StatefulSet since ArgoCD v2.8
 kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
 ```
 
-> **Enrolling ArgoCD in the mesh needs two accommodations first — and a
-> workload restart.** ArgoCD is a high-value target (cluster-wide RBAC, secret
-> access, code execution in repo-server), so its internal pod-to-pod traffic
-> must be mTLS. But the ArgoCD Helm chart ships its own per-component
-> NetworkPolicies that were written for a non-mesh cluster, and Istio ambient
-> changes two things they don't account for:
->
-> 1. **Kubelet health probes.** ztunnel SNATs kubelet probes to the link-local
->    `169.254.7.127`; the chart's default-deny drops that source, so
->    `repo-server` (8084) and `application-controller` (8082) fail liveness with
->    `i/o timeout` and CrashLoopBackOff. Fixed by a narrow CiliumNetworkPolicy
->    allowing only that link-local source to the probe port — which is *strictly
->    more secure* than a PeerAuthentication PERMISSIVE exception: the port stays
->    STRICT mTLS for all pod traffic and only the node-local kubelet probe is let
->    through. (Verified: fresh pods pass probes from scratch under namespace-wide
->    STRICT.)
-> 2. **Intra-namespace HBONE.** In ambient, pod-to-pod traffic is HBONE on TCP
->    15008; Cilium sees 15008, not the app port. The chart NetworkPolicies allow
->    app ports but not 15008, so once meshed, `server -> redis` and
->    `server -> repo-server` are dropped (i/o timeout / connection reset). Fixed
->    by an *ingress-only* HBONE allow (an egress rule would cut off
->    server -> kube-apiserver, which the chart NPs otherwise leave open).
->
-> Both live in `infra/k8s/network-policy/argocd.yaml` and MUST be applied
-> imperatively here, before enrollment — they cannot come from the mesh-policy
-> Application (that is delivered by ArgoCD, which needs a healthy repo-server to
-> sync: a circular dependency). mesh-policy adopts and reconciles the same file
-> at steady state. Finally, restart the workloads: istio-cni programs a pod's
-> mesh redirection at creation, so already-running pods must be recreated to be
-> cleanly meshed.
+### 5.1 Install ArgoCD Image Updater
+
+> Image Updater polls a container registry for new digests and commits the
+> updated tag back to git, closing the automated deploy loop
+> ([GITOPS-OPERATIONS.md § The automated deploy loop](GITOPS-OPERATIONS.md#the-automated-deploy-loop)).
+> It is part of [Platform Ready](GITOPS-ROLLOUT.md#platform-ready--the-precondition)
+> (checklist #7) so both tracks reach the same state. It sits idle locally until
+> the image-repo parameter is GHCR; installing it now keeps the local platform a
+> faithful mirror of Hetzner.
 
 ```bash
-# 1) Apply the ambient accommodations BEFORE enrolling (probe CiliumNPs + HBONE).
-kubectl apply -f infra/k8s/network-policy/argocd.yaml
+# --version: the Image Updater row of the Pinned versions table.
+helm upgrade --install argocd-image-updater argo/argocd-image-updater \
+  --namespace argocd \
+  --version 0.11.0 \
+  --set config.argocd.insecure=true
 
-# 2) Enroll the argocd namespace in the mesh. The namespace chart also declares
-#    argocd with meshEnroll: true (infra/helm/namespaces/values.yaml), so once
-#    that syncs the label is under GitOps governance and cannot drift.
-kubectl label namespace argocd istio.io/dataplane-mode=ambient
-
-# 3) Restart so all argocd pods are recreated cleanly inside the mesh with the
-#    accommodations active. Without this, pre-existing pods stay half-meshed.
-kubectl -n argocd rollout restart deployment,statefulset
-kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=180s
-kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=180s
-
-# VERIFICATION: label set, and all argocd pods Ready (no CrashLoopBackOff).
-kubectl get namespace argocd --show-labels | grep dataplane-mode
-kubectl -n argocd get pods
+kubectl -n argocd rollout status deploy/argocd-image-updater --timeout=180s
 ```
 
-### 5.1 Log in and rotate admin password
+> **Terraform equivalent**: `helm_release.argocd` + `helm_release.argocd_image_updater`
+> in `infra/terraform/modules/platform/` (the automated track), same versions and settings.
 
-> **Why rotate?** ArgoCD generates a random admin password on first install and
-> stores it as a Kubernetes Secret. This password should be rotated immediately
-> and the auto-generated secret deleted. This is a standard security practice:
-> auto-generated bootstrap credentials should never persist.
-
-```bash
-# WHAT: port-forward makes the ArgoCD API available at localhost:9090.
-# This creates a tunnel from your machine into the cluster. Nothing is exposed
-# to the network — only your local machine can reach it.
-kubectl -n argocd port-forward svc/argocd-server 9090:80 &
-PF_PID=$!
-sleep 3
-
-# WHAT: retrieve the auto-generated admin password from the cluster.
-ARGOCD_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath='{.data.password}' | base64 -d)
-
-argocd login localhost:9090 \
-  --username admin \
-  --password "$ARGOCD_PASS" \
-  --insecure   # "insecure" here means "skip TLS check to the ArgoCD server"
-               # — we are connecting via plain HTTP through the port-forward,
-               #   not over the network. This is expected.
-
-# WHAT: choose a new password and rotate immediately.
-# SECURITY: read -s hides your input from the terminal (no shoulder surfing).
-read -r -s -p "New ArgoCD admin password: " NEW_PASS; echo
-argocd account update-password \
-  --account admin \
-  --current-password "$ARGOCD_PASS" \
-  --new-password "$NEW_PASS"
-
-# WHAT: clear secrets from shell memory and delete the bootstrap secret.
-# SECURITY: unset removes the variable from memory. Deleting the Secret removes
-#   the auto-generated password from the cluster. Only your new password exists.
-unset ARGOCD_PASS NEW_PASS
-kubectl -n argocd delete secret argocd-initial-admin-secret
-
-kill $PF_PID 2>/dev/null || true
-```
+> **ArgoCD is installed but NOT yet meshed and NOT yet rotated.** Mesh
+> enrollment (with its two ambient accommodations) and the admin-password
+> rotation are the first two steps of
+> [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md#1-enroll-argocd-in-the-mesh) — they are
+> identical on both environments, so they live in the shared guide.
 
 ---
 
-## 6) Secrets bootstrap (SOPS + age)
+## Platform Ready — the cut-off point
 
-> **What is this about?** The ArgoCD Application manifests for PostgreSQL and
-> Keycloak reference Kubernetes Secrets by name (e.g. `postgres-credentials`).
-> When ArgoCD tries to deploy PostgreSQL, it expects this Secret to already
-> exist so it can read the database password from it.
->
-> We use the **same SOPS + age workflow** as the production Hetzner guide.
-> The encrypted files in `infra/secrets/` are the single source of truth —
-> both environments decrypt from the same files. This eliminates secret name
-> drift and ensures the SOPS workflow is tested locally before production.
->
-> **On first bootstrap** you generate the age keypair and create the encrypted
-> files. On subsequent cluster recreations (`k3d cluster delete` + re-create),
-> the keypair and encrypted files already exist — skip to "Decrypt and apply".
-
-### 6.1 Generate age keypair (first time only)
-
-> **Skip this** if you already have a keypair at `~/.config/sops/age/keys.txt`
-> (e.g. from the production guide).
+The platform layer is installed. This is **Platform Ready** — where this track
+ends and GitOps takes over. Confirm the cluster against the
+[Platform Ready checklist](GITOPS-ROLLOUT.md#platform-ready--the-precondition)
+(the full definition, shared by both tracks) before continuing.
 
 ```bash
-# WHAT: create an age keypair. The private key is written to the file.
-#   The public key is printed to stdout (and stored in the file's header comment).
-# SECURITY: this private key unlocks ALL secrets. Back it up immediately.
-mkdir -p ~/.config/sops/age
-age-keygen -o ~/.config/sops/age/keys.txt
-
-# NOTE: copy the public key from the output — it looks like:
-#   age1xxxxxxxxxxxxxxxxxxxxxxxxx
-# You will need it for .sops.yaml below.
+kubectl get nodes                      # one Ready node
+kubectl -n kube-system get pods        # Cilium
+kubectl -n istio-system get pods       # istiod, ztunnel, istio-cni
+kubectl -n cert-manager get pods       # cert-manager
+kubectl -n argocd get pods             # ArgoCD + Image Updater
+curl -s http://k3d-registry.localhost:5000/v2/_catalog   # registry reachable
 ```
 
-### 6.2 Configure SOPS (first time only)
-
-> **Skip this** if `.sops.yaml` in the repo root already has your public key.
-
-```bash
-# WHAT: tell SOPS which encryption key to use for files matching a path pattern.
-# HOW IT WORKS: when you run `sops infra/secrets/foo.yaml`, SOPS checks
-#   .sops.yaml, finds the matching path_regex, and encrypts with the specified
-#   age public key. Decryption uses the private key at ~/.config/sops/age/keys.txt.
-cat > .sops.yaml <<YAML
-creation_rules:
-  - path_regex: infra/secrets/.*\.yaml$
-    age: age1xxxxxxxxxxxxxxxxxxxxxxxxx   # ← replace with YOUR public key
-YAML
-```
-
-### 6.3 Create and encrypt secret files (first time only)
-
-> **Skip this** if `infra/secrets/postgres.enc.yaml` and
-> `infra/secrets/keycloak.enc.yaml` already exist (from a previous bootstrap
-> or from the production guide).
-
-```bash
-# WHAT: sops opens your $EDITOR with a plain YAML file.
-#   Write the secret values in plain text, save and close.
-#   SOPS encrypts the values on exit — keys stay human-readable.
-sops infra/secrets/postgres.enc.yaml
-```
-
-Example content (plain text — SOPS encrypts this on save):
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-credentials
-  namespace: infra
-type: Opaque
-stringData:
-  postgres-password: "POSTGRES_SUPERUSER_PASSWORD"      # PostgreSQL superuser (postgres)
-  keycloak-db-password: "KEYCLOAK_DB_USER_PASSWORD"      # Keycloak's dedicated DB user — distinct from the superuser and from the Keycloak admin UI password
-```
-
-```bash
-sops infra/secrets/keycloak.enc.yaml
-```
-
-Example content:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: keycloak-credentials
-  namespace: infra
-type: Opaque
-stringData:
-  admin-password: "KEYCLOAK_ADMIN_UI_PASSWORD"           # Keycloak web admin console — unrelated to the database passwords above
-```
-
-```bash
-# VERIFICATION: view the encrypted file — values are ciphertext, keys are plain.
-cat infra/secrets/postgres.enc.yaml
-
-# Safe to commit — ciphertext is meaningless without the age private key.
-git add .sops.yaml infra/secrets/
-git commit -m "chore: add SOPS config and encrypted secrets"
-git push
-```
-
-### 6.4 Install SOPS decryption key into the cluster
-
-> **What is this?** ArgoCD needs the age private key to decrypt
-> `infra/secrets/*.enc.yaml` at sync time. We store it as a Kubernetes Secret
-> in the `argocd` namespace where the SOPS plugin can read it.
->
-> **Identical to production** — the Hetzner guide does the same step in §4.2.
->
-> **What `--secrets-encryption` does and why k3d lacks it:**
->
-> On a real k3s node, you can pass `--secrets-encryption` in the server start
-> flags. This tells k3s to encrypt every Kubernetes `Secret` object with
-> AES-CBC before writing it to etcd (the key-value store that persists all
-> cluster state). The encryption key is derived from a key file on the node's
-> disk. Without this flag, Kubernetes Secrets are stored as **base64 in
-> plaintext** in etcd — not encrypted, just encoded. Anyone who can read the
-> etcd data file on the node's filesystem can extract every Secret in the
-> cluster with a simple base64 decode.
->
-> k3d does not expose this flag because k3d itself is a wrapper that starts k3s
-> inside a Docker container. The k3d CLI abstracts the k3s server arguments, and
-> `--secrets-encryption` is not one of the arguments k3d passes through. Even
-> if you attempted to inject it, k3d's container lifecycle management would
-> not handle the required key file bootstrap correctly.
->
-> **Why this is acceptable locally, and what actually protects the secret here:**
->
-> The threat that `--secrets-encryption` defends against is: *an attacker gains
-> read access to the etcd data files on the node's disk*. On a Hetzner VM with
-> a public IP, there are realistic paths to this: a misconfigured API server,
-> a stolen disk image, or physical access to the datacenter. On your local
-> machine, the etcd data lives inside a Docker container's overlay filesystem —
-> a directory on your own disk, not exposed to any network.
->
-> The relevant threat model locally is not "someone reads the etcd data files"
-> but "someone has access to my machine". If your machine is compromised to the
-> point where an attacker can reach the Docker container's filesystem, they
-> already have broader access than any single Kubernetes Secret provides.
->
-> What does protect the age key here:
->
-> | Layer | What it does |
-> |---|---|
-> | SOPS + age encryption in git | The key itself is never in git. The *secrets it decrypts* are encrypted in git. |
-> | Kubernetes RBAC | Only the `argocd` namespace ServiceAccounts can read `sops-age-key`. Pods in `register` or `infra` cannot. |
-> | NetworkPolicy (Cilium) | Pod-to-pod traffic is restricted. No pod can query the Kubernetes API directly unless its ServiceAccount is explicitly granted it. |
-> | Istio mTLS | internal argocd pod-to-pod traffic (including when the SOPS plugin reads the key) is mTLS encrypted between authenticated workloads. |
->
-> **The accepted risk** is: if someone has root on your machine while the cluster
-> is running, they can reach the Docker container, find the etcd data directory,
-> and extract the base64-encoded `sops-age-key` Secret. This is an accepted
-> local dev risk because: (a) the local cluster holds dev-only throwaway
-> credentials, not production values, and (b) machine compromise at that level
-> is outside the scope of any Kubernetes security control. The production Hetzner
-> guide mitigates this with `--secrets-encryption` + Hetzner's disk encryption
-> option — see [K3S-GITOPS-BOOTSTRAP.md §7](K3S-GITOPS-BOOTSTRAP.md#7-security-boundaries-and-accepted-risks).
-
-```bash
-kubectl -n argocd create secret generic sops-age-key \
-  --from-file=keys.txt="$HOME/.config/sops/age/keys.txt" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# VERIFICATION: the secret should exist.
-kubectl -n argocd get secret sops-age-key
-```
-
-### 6.5 Decrypt and apply secrets to the cluster
-
-> **This is the step you repeat** (along with §6.4) on every cluster
-> recreation. Steps 6.1–6.3 are one-time setup.
-
-```bash
-# WHAT: pre-create the infra namespace.
-# WHY: the Secrets applied in the next step must exist before ArgoCD syncs
-#   the PostgreSQL and Keycloak Applications — those workloads read the
-#   Secrets at startup and will fail if they are absent. The namespace must
-#   exist before Secrets can be created inside it. ArgoCD will later adopt
-#   and manage this namespace via the namespaces Helm chart; creating it here
-#   first is simply the required ordering.
-kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f -
-
-# WHAT: decrypt the SOPS files and apply them as Kubernetes Secrets.
-# HOW IT WORKS: `sops -d` decrypts to stdout using the age key at
-#   ~/.config/sops/age/keys.txt. The output is plain YAML that kubectl applies.
-# SECURITY: the decrypted values only exist in the pipe — they are not written
-#   to disk or stored in shell variables.
-sops -d infra/secrets/postgres.enc.yaml | kubectl apply -f -
-sops -d infra/secrets/keycloak.enc.yaml | kubectl apply -f -
-
-# VERIFICATION: secrets exist with the expected keys.
-kubectl -n infra get secret postgres-credentials -o jsonpath='{.data}' | jq keys
-kubectl -n infra get secret keycloak-credentials -o jsonpath='{.data}' | jq keys
-```
+All pods `Running`/`Completed`, one node `Ready`, registry responding → you are
+at Platform Ready.
 
 ---
 
-## 7) Connect ArgoCD to your git repo
+## → Continue with the shared guides
 
-> **What are we doing?** Three things, in this order:
-> 1. Set the correct SSH repo URL in the ArgoCD Application manifests
-> 2. Create a deploy key so ArgoCD can clone the private repo
-> 3. Register the repo with the ArgoCD CLI
->
-> **Why SSH and not HTTPS?** This is a private repository. ArgoCD runs as a
-> pod inside the cluster — it cannot use your YubiKey or personal SSH agent.
-> The standard pattern is a **GitHub Deploy Key**: a dedicated software
-> SSH keypair, read-only, scoped to this one repo, stored as a Kubernetes
-> Secret. Your personal YubiKey-backed key handles your `git push`. ArgoCD
-> gets its own separate key with no hardware dependency.
->
-> **GitOps principle — single source of truth**: the git repository is the
-> authoritative declaration of what should run in the cluster. ArgoCD never
-> applies anything that is not in git. If you change something in the cluster
-> manually, ArgoCD reverts it (self-healing). If you add a new file to git,
-> ArgoCD applies it (reconciliation). This means git history IS your audit
-> trail — every cluster change is a commit with an author and timestamp.
+From Platform Ready the path is identical for both tracks and all points:
 
-### 7.1 Check the repo URL in the Application manifests
+1. **[SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md)** — create the SOPS/age/YubiKey
+   secrets and apply them to the cluster.
+2. **[GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md)** — enroll ArgoCD in the mesh, rotate
+   its password, connect git, push the application images, apply the root
+   App-of-Apps, and run the auth-chain tests.
 
-The ArgoCD Application manifests reference this repository by its SSH URL,
-`git@github.com:risquanter/register-infra.git`. The files under
-`infra/argocd/apps/` that carry this repoURL are: `root.yaml` (both
-`sources` entries), `namespaces.yaml`, `register.yaml`, `mesh-policy.yaml`,
-`opa.yaml`, `keycloak.yaml`, `frontend.yaml`, `irmin.yaml`, and
-`spicedb.yaml`. The other two files reference external Helm chart
-repositories and never point at this repository: `postgresql.yaml`
-(`https://charts.bitnami.com/bitnami`) and `kyverno.yaml`
-(`https://kyverno.github.io/kyverno/`).
-
-- **Deploying this repository as-is**: no change is needed.
-- **Deploying from your own fork**: replace the repoURL in every file listed
-  above with your fork's SSH URL. Use the SSH form: ArgoCD authenticates with
-  a deploy key (§7.2), and HTTPS + SSH key does not work. The AppProject
-  definitions under `infra/argocd/projects/` whitelist the same URL in
-  `sourceRepos` — update those too, or ArgoCD rejects the Applications.
-
-```bash
-# Fork deployment only — skip if using this repository as-is.
-cd /home/danago/projects/register-infra
-
-FORK_URL="git@github.com:<your-org>/register-infra.git"
-
-# WHAT: replace the repoURL in every ArgoCD manifest that references this
-# repository (Application sources and AppProject sourceRepos).
-grep -rl "git@github.com:risquanter/register-infra.git" infra/argocd/ \
-  | xargs sed -i "s|git@github.com:risquanter/register-infra.git|${FORK_URL}|g"
-
-# WHAT: commit so ArgoCD sees the correct URL when it clones.
-git add infra/argocd/
-git commit -m "chore: point ArgoCD manifests at fork"
-git push
-```
-
-### 7.2 Create a GitHub Deploy Key for ArgoCD
-
-> **Why not your personal SSH key or YubiKey?** ArgoCD runs as a pod inside
-> the cluster. It has no access to hardware security keys on your USB bus, and
-> sharing your personal private key with a cluster process is poor practice.
-> A deploy key is:
-> - **Read-only** — can clone and pull, cannot push to the repo
-> - **Scoped to one repo** — not your entire GitHub account
-> - **Stored as a Kubernetes Secret** — ArgoCD reads it from there at sync time
-
-```bash
-# WHAT: generate a dedicated SSH keypair for ArgoCD.
-# - No passphrase (-N ""): ArgoCD must use this key unattended inside the cluster.
-# - Ed25519: modern algorithm, compact key, strong security.
-# SECURITY: read-only access to one repo. Not hardware-backed by design.
-ssh-keygen -t ed25519 -C "argocd@register-dev" -f ~/.ssh/argocd_deploy_key -N ""
-
-# WHAT: print the public key. Copy this to paste into GitHub.
-cat ~/.ssh/argocd_deploy_key.pub
-```
-
-Add the public key to GitHub:
-
-1. Go to `https://github.com/risquanter/register-infra` → **Settings** → **Deploy keys** → **Add deploy key**
-2. Title: `argocd-local-dev`
-3. Paste the public key
-4. Leave **Allow write access** unchecked — ArgoCD only needs read access
-5. Click **Add key**
-
-### 7.3 Register the repo with ArgoCD
-
-> **Why do we need to "register" the repo?** ArgoCD maintains an internal list
-> of trusted repositories. This is a security feature — it prevents someone
-> from crafting an Application manifest that points to a malicious repo.
-> `argocd repo add` adds your repo to this allow list and stores the deploy
-> key as a Kubernetes Secret in the `argocd` namespace.
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 9090:80 &
-PF_PID=$!
-sleep 3
-
-# WHAT: log in to ArgoCD. The CLI session token from §5.1 does not persist —
-#   the port-forward was killed and time has passed. Always re-login here.
-argocd login localhost:9090 --username admin --insecure
-
-# WHAT: register the repo with the deploy key.
-# --ssh-private-key-path: ArgoCD reads the key once and stores it as a
-#   Kubernetes Secret. You can delete the local file afterwards.
-# --insecure-skip-server-verification: skips TLS verification to the ArgoCD
-#   server — we are on localhost via port-forward, so there is no server cert.
-#   This does NOT affect the SSH connection to GitHub.
-argocd repo add "$REPO_URL" \
-  --ssh-private-key-path ~/.ssh/argocd_deploy_key \
-  --insecure-skip-server-verification
-
-kill $PF_PID 2>/dev/null || true
-
-# WHAT: the private key is now stored in the cluster. Remove it from disk.
-rm ~/.ssh/argocd_deploy_key
-```
+The application images (`register-server`, `irmin`, `frontend`) are built and
+pushed to the local registry with the loop in
+**[IMAGE-DEPLOY.md](IMAGE-DEPLOY.md)** — the first push is a precondition of
+[GITOPS-ROLLOUT.md §5](GITOPS-ROLLOUT.md#5-ensure-application-images-are-in-the-registry),
+and the same loop is how you ship every later build. The public upstream images
+(Keycloak, PostgreSQL, SpiceDB, OPA, nginx) need no action — the node pulls them
+directly.
 
 ---
 
-## 7.5) Build and import application images
-
-> **Why now?** Step §8 applies the root App-of-Apps, which triggers ArgoCD
-> to deploy every Application — including the register app, its Irmin
-> persistence backend, and the frontend SPA. All three use
-> `imagePullPolicy: Never`, meaning kubelet will not attempt a registry
-> pull. If the images are not pre-loaded into k3d's containerd store, the
-> pods fail with `ErrImageNeverPull` and the ArgoCD Applications report
-> `Degraded`.
->
-> **The images are built from a separate repository**: `risquanter/register`.
-> This project (`register-infra`) does not contain Dockerfiles for the
-> application — only the Helm charts that deploy it. Clone the application
-> repo first if you haven't already.
-
-```bash
-# ── Clone the application repository (skip if already cloned) ──
-cd ~/projects
-git clone git@github.com:risquanter/register.git
-cd ~/projects/register
-
-# ── Build all three application images via docker compose ──
-# WHAT: docker-compose.yml uses `pull_policy: build`, so `docker compose build
-# <service>` builds directly from each Dockerfile using layer cache — no
-# separate `docker build`/`docker tag` steps needed. `docker compose build`
-# ignores profile gating (only `up`/`start` respect profiles), so this works
-# even though irmin and frontend are profile-gated for `up`.
-# TAGS MUST MATCH THE CHARTS: the Helm charts pin the tag they deploy via
-# `image.tag` in each chart's values.yaml — currently "0.4.0" for register
-# (infra/helm/register/values.yaml) and frontend (infra/helm/frontend/
-# values.yaml), and "3.11" for irmin (infra/helm/irmin/values.yaml). The
-# authoritative tag is whatever image.tag currently is in each values.yaml —
-# check those files and use the same values here. With pullPolicy Never, a
-# tag mismatch fails the pod with ErrImageNeverPull.
-# APP_VERSION sets the tag for register-server and frontend
-# (compose tags them local/register-server:${APP_VERSION:-dev} and
-# local/frontend:${APP_VERSION:-dev}); the irmin tag is pinned directly in
-# docker-compose.yml.
-export APP_VERSION=0.4.0   # = image.tag in the register and frontend charts
-docker compose build register-server
-docker compose build irmin
-docker compose build frontend
-
-# If the irmin tag produced by compose (`docker images local/irmin-prod`)
-# differs from the chart's image.tag, retag it to the chart's value:
-# docker tag local/irmin-prod:<compose-tag> local/irmin-prod:3.11
-
-# ── Import all three images into the k3d cluster ──
-# WHAT: loads the images directly into k3d's containerd image store.
-# No registry is involved. This is the only way to update images when
-# imagePullPolicy is set to Never.
-# The imported tags must be the same tags the charts pin (see above).
-cd ~/projects/register-infra
-k3d image import local/register-server:0.4.0 -c register-dev
-k3d image import local/irmin-prod:3.11 -c register-dev
-k3d image import local/frontend:0.4.0 -c register-dev
-
-# ── Import the Keycloak image ──
-# WHAT: quay.io multi-arch images fail with `k3d image import`.
-# Workaround: docker save | ctr images import.
-# NOTE: this image is used by both the init container (copies /opt/keycloak
-# to an emptyDir) and the main container. One import covers both.
-docker pull quay.io/keycloak/keycloak:26.0
-docker save quay.io/keycloak/keycloak:26.0 \
-  | docker exec -i k3d-register-dev-server-0 ctr --namespace k8s.io images import -
-```
-
-> **After rebuilds**: repeat the build + import + rollout restart cycle
-> (tags again from each chart's values.yaml):
-> ```bash
-> cd ~/projects/register
-> APP_VERSION=0.4.0 docker compose build register-server
-> cd ~/projects/register-infra
-> k3d image import local/register-server:0.4.0 -c register-dev
-> # k3d image import local/irmin-prod:3.11 -c register-dev   # if irmin changed
-> # k3d image import local/frontend:0.4.0 -c register-dev    # if frontend changed
-> kubectl -n register rollout restart deployment/register
-> # kubectl -n register rollout restart statefulset/irmin    # if irmin changed
-> # kubectl -n register rollout restart deployment/frontend  # if frontend changed
-> ```
-
----
-
-## 8) Apply root App-of-Apps — the handoff moment
-
-> **This is the single most important command in the entire guide.**
->
-> The "App of Apps" pattern is an ArgoCD convention:
-> - You create ONE ArgoCD Application (the "root") that points to a directory
->   in your git repo (`infra/argocd/apps/`)
-> - That directory contains more Application YAML files (one per service)
-> - ArgoCD reads the root, discovers the child Applications, and deploys them
-> - Adding a new service to the cluster = adding one YAML file to that
->   directory and pushing to git
->
-> After this command, you stop running `kubectl apply` or `helm install`
-> for anything in the GitOps layer.
-
-```bash
-# WHAT: this is the LAST kubectl apply you run.
-# After this, ArgoCD manages everything declared in infra/argocd/apps/.
-kubectl apply -f infra/argocd/apps/root.yaml
-```
-
-ArgoCD will now discover and deploy these Applications automatically:
-
-| ArgoCD Application | What it deploys | Source location |
-|---|---|---|
-| `namespaces` | `argocd`, `register`, `infra`, `observability`, `kyverno` namespaces with Pod Security labels, mesh enrollment, and LimitRanges | `infra/helm/namespaces/` |
-| `kyverno` | Kyverno admission controller in `kyverno` namespace (wave 1, `kyverno` project) | Upstream Helm chart v3.7.1 (remote) |
-| `postgresql` | PostgreSQL database in `infra` namespace | Bitnami Helm chart (remote) |
-| `keycloak` | Keycloak identity provider in `infra` namespace (init container copies `/opt/keycloak` to emptyDir for `readOnlyRootFilesystem: true`) | `infra/helm/keycloak/` (local chart, `quay.io/keycloak/keycloak:26.0`) |
-| `spicedb` | SpiceDB authorization service in `infra` namespace (wave 3, `infra` project) | `infra/helm/spicedb/` (local chart, `ghcr.io/authzed/spicedb`) |
-| `opa` | OPA ext_authz server (2 replicas + PDB) in `register` namespace | `infra/helm/opa/` |
-| `irmin` | Irmin GraphQL persistence backend (StatefulSet + PVC) in `register` namespace | `infra/helm/irmin/` |
-| `mesh-policy` | Istio JWT/auth, PeerAuthentication, NetworkPolicies, RBAC | `infra/k8s/` (raw YAML) |
-| `register` | Application API server (port 8090 API, port 8091 health) in `register` namespace | `infra/helm/register/` |
-| `frontend` | Frontend SPA (nginx, port 8080) in `register` namespace | `infra/helm/frontend/` |
-
-> For the detailed reference (AppProject scoping, security policies, repo
-> layout), see [GITOPS-OPERATIONS.md — What ArgoCD manages](GITOPS-OPERATIONS.md#what-argocd-manages).
-
-### 8.1 Watch the sync
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 9090:80 &
-PF_PID=$!
-sleep 3
-
-# WHAT: log in to ArgoCD. Always re-login after starting a new port-forward.
-argocd login localhost:9090 --username admin --insecure
-
-# WHAT: list all ArgoCD Applications and their sync/health status.
-# "Synced" + "Healthy" means the cluster matches git and the pods are running.
-argocd app list
-
-# WHAT: wait for each app to become healthy.
-# PostgreSQL and Keycloak are heavier — allow up to 5 minutes.
-argocd app wait namespaces --health --timeout 60
-argocd app wait postgresql --health --timeout 300
-argocd app wait keycloak --health --timeout 300
-argocd app wait irmin --health --timeout 120
-argocd app wait mesh-policy --health --timeout 60
-argocd app wait frontend --health --timeout 60
-argocd app wait register --health --timeout 120
-
-kill $PF_PID 2>/dev/null || true
-```
-
-### 8.2 Browse the ArgoCD UI
-
-```bash
-# WHAT: open the ArgoCD web dashboard.
-kubectl -n argocd port-forward svc/argocd-server 9090:80
-# Open http://localhost:9090 in your browser.
-# Log in with username "admin" and the password you set in §5.1.
-```
-
-> The ArgoCD UI shows a visual graph of every Application, its sync status
-> (does the cluster match git?), and health status (are the pods running?).
-> This is your primary feedback loop during development. If something breaks
-> after a git push, the UI shows exactly which resource failed and why.
-
----
-
-## 9) Install the Istio waypoint
-
-> **What is a waypoint?** In Istio ambient mode, there are two proxy layers:
-> - **ztunnel** (L4): handles mTLS encryption for all pod traffic. Already
->   running from §3. Transparent — no policy decisions, just encryption.
-> - **Waypoint proxy** (L7): a per-namespace Envoy proxy that inspects HTTP
->   headers, validates JWTs, and enforces authorization policies.
->
-> The auth chain described in [SECURITY-FLOW.md](SECURITY-FLOW.md) runs
-> entirely in the waypoint: JWT validation, header stripping, OPA ext_authz.
-> Without a waypoint, Istio only provides mTLS — no L7 policy enforcement.
->
-> **Why is this not in the GitOps layer?** The waypoint is an Istio runtime
-> object that istioctl creates as a Gateway resource. It could be declared as
-> static YAML in git, but `istioctl waypoint apply` is the officially supported
-> method and handles internal wiring that is complex to replicate manually.
-> This is an accepted imperative step alongside the bootstrap layer.
->
-> Once applied, the waypoint activates all L7 enforcement — JWT validation,
-> header stripping, OPA ext_authz, and AuthorizationPolicy evaluation — for the
-> `register` namespace. Without it, only ztunnel's L4 mTLS is in effect.
-
-```bash
-# PREREQUISITE: the register namespace must exist (created by the namespaces
-# Application in step 8). Verify:
-kubectl get ns register --show-labels | grep ambient
-
-# WHAT: install a waypoint proxy for the register namespace.
-# --enroll-namespace: tells all pods in the namespace to route through this
-#   waypoint for L7 policy evaluation.
-istioctl waypoint apply -n register --enroll-namespace
-
-# VERIFICATION: a Gateway object should exist in the register namespace.
-kubectl -n register get gateway
-```
-
----
-
-## 9.5) Install the Istio ingress gateway (dev/Hetzner parity)
-
-> **What is this, and how is it different from the waypoint?** The waypoint
-> above is an *internal* L7 proxy — it polices east-west traffic already
-> headed to pods inside the mesh (its ClusterIP, `10.43.x.x`, is only
-> reachable from inside the cluster). It has no NodePort/LoadBalancer and was
-> never meant to be an entry point from outside the cluster. Without a
-> separate ingress Gateway, the only way to get traffic from your host
-> machine into the cluster is `kubectl port-forward`.
->
-> This ingress Gateway matches the design in
-> [ADR-INFRA-007 §2](adr/ADR-INFRA-007.md). It terminates **HTTPS on :443**
-> (`gatewayClassName: istio` auto-provisions a LoadBalancer Service + Deployment).
-> The TLS cert comes from cert-manager: locally a **self-signed** `ClusterIssuer`
-> (`infra/k8s/cert-manager/selfsigned-issuer.yaml`); Hetzner swaps in an ACME
-> issuer bound to the real domain — only the issuer differs, the Gateway/HTTPRoute
-> are identical. There is deliberately **no plaintext :80** — JWTs and capability
-> URLs must not cross the wire in cleartext.
->
-> These manifests (`istio/ingress-gateway.yaml`, `cert-manager/selfsigned-issuer.yaml`,
-> and the `world → gateway:443` rule in `network-policy/register.yaml`) all live
-> under `infra/k8s/` and are deployed by the `mesh-policy` Application at §8 — no
-> imperative step here, this section is verification only.
-
-```bash
-# VERIFICATION: Gateway PROGRAMMED, its LoadBalancer Service has an EXTERNAL-IP,
-# and the TLS secret was issued by cert-manager.
-kubectl -n register get gateway register-ingress
-kubectl -n register get svc register-ingress-istio
-kubectl -n register get secret register-ingress-tls
-```
-
-**How `https://localhost:8443` reaches the frontend:** the ingress Gateway,
-its TLS `Certificate` (self-signed, cert-manager), and the `world → gateway:443`
-NetworkPolicy are all deployed by GitOps (the `mesh-policy` Application syncs
-`infra/k8s/`) — no separate apply here. The path: host `:8443` →
-`--port "8443:443@loadbalancer"` (§1) → node `:443` → servicelb (klipper) →
-Gateway pod → `HTTPRoute` → frontend nginx. The Gateway is **HTTPS-only** (no
-plaintext `:80`); the register namespace's default-deny drops everything except
-the one `world → gateway:443` allow. Verify end-to-end:
-
-```bash
-# -k: the local cert is self-signed. SPA shell served by nginx directly:
-curl -sk https://localhost:8443/ | head -1        # → HTTP/1.1 200 OK
-```
-
-> **AuthorizationPolicy public paths.** When the waypoint enforces L7 policy,
-> only paths in `allow-capability-urls`
-> ([authorization-policy.yaml](../infra/k8s/istio/authorization-policy.yaml)) are
-> reachable without a JWT. It whitelists `/w/*` and `/health`; the SPA root `/`
-> and static assets the frontend serves must also be public, or the waypoint
-> default-denies them (403). Ensure the public-path set covers the frontend's
-> served routes when enabling L7 enforcement on the ingress path.
-
----
-
-## 10) Configure Keycloak
-
-> **What is Keycloak?** Keycloak is an open-source identity provider (IdP).
-> It handles user login, issues JWTs (JSON Web Tokens), and exposes a JWKS
-> (JSON Web Key Set) endpoint that Istio uses to validate token signatures
-> without calling Keycloak on every request.
->
-> Keycloak was deployed by ArgoCD in step 8. Now we configure it: create a
-> "realm" (a tenant), register client applications, and create test users.
-> This configuration happens through Keycloak's admin UI — it is stored in
-> PostgreSQL, not in git.
-
-```bash
-# WHAT: forward Keycloak's port so you can access the admin UI from your browser.
-kubectl -n infra port-forward svc/keycloak 8081:80
-# Open http://localhost:8081 in your browser.
-```
-
-Configure in the admin UI:
-
-1. **Realm**: `register` (a realm is an isolated tenant — like a separate
-   user database. The default "master" realm is for Keycloak admin only.)
-2. **Client: `register-api`** — confidential client, service account enabled
-   (for server-to-server auth)
-3. **Client: `register-web`** — public client, PKCE enabled (for browser-based
-   login. PKCE is a security extension to OAuth2 that prevents authorization
-   code interception.)
-4. **User**: create a test user with a password
-5. **Realm roles**: create roles that OPA will evaluate:
-   - `analyst` — can read data
-   - `editor` — can read and write data
-   - `team_admin` — can manage team settings and cache
-6. **Protocol mappers**: ensure the JWT contains the claims that the mesh
-   and OPA expect:
-   - `sub` claim (user ID) — Istio maps this to `x-user-id`
-   - `email` claim — mapped to `x-user-email`
-   - `realm_access.roles` — OPA evaluates these for role-based gating
-
-Verify OIDC is working:
-
-```bash
-# WHAT: check the OIDC discovery endpoint. This is the URL that Istio's
-#   RequestAuthentication uses as "issuer" to find the JWKS endpoint.
-curl -s http://localhost:8081/realms/register/.well-known/openid-configuration | jq .issuer
-# Expected: "http://keycloak.infra.svc.cluster.local/realms/register"
-
-# WHAT: check the JWKS endpoint — the public keys Istio caches for JWT validation.
-curl -s http://localhost:8081/realms/register/protocol/openid-connect/certs | jq .keys[0].kid
-
-# WHAT: get a test JWT by logging in as the test user.
-# This simulates what happens when a user logs in via the application.
-curl -s -X POST "http://localhost:8081/realms/register/protocol/openid-connect/token" \
-  -d "grant_type=password" \
-  -d "client_id=register-web" \
-  -d "username=<test-user>" \
-  -d "password=<test-password>" \
-  | jq -r .access_token
-```
-
----
-
-## 11) Test the authentication chain
-
-> **What are we testing?** The security invariants from
-> [SECURITY-FLOW.md](SECURITY-FLOW.md). These tests verify that the mesh
-> rejects invalid tokens, strips forged headers, and blocks direct pod access.
-> Run them after every Istio policy change.
->
-> **Prerequisites:** §9 (waypoint deployed) and §10 (Keycloak realm
-> provisioned with test user). Without the waypoint, the tests in this section
-> will return unexpected results (likely 200 for everything, since no L7
-> policy is evaluated).
->
-> **Full curl demo:** For the complete Layer 0/1/2 walkthrough (public routes,
-> role gating, viewer vs editor, admin gate), see
-> [TESTING.md § Curl Demo](TESTING.md#curl-demo--defence-layers-02).
-
-```bash
-# SETUP: port-forward the register app so tests can reach it from localhost.
-# The register app listens on port 8090 (API) and 8091 (health probes).
-# Traffic through the waypoint uses the k3d loadbalancer ports (8080/8443).
-kubectl -n register port-forward svc/register 8090:8090 &
-REGISTER_PF=$!
-sleep 2
-
-# SETUP: get a valid JWT from Keycloak (use your test user from §10).
-TOKEN=$(curl -s -X POST \
-  "http://localhost:8081/realms/register/protocol/openid-connect/token" \
-  -d "grant_type=password" \
-  -d "client_id=register-web" \
-  -d "username=demo-editor" \
-  -d "password=editor-demo-2026" \
-  | jq -r .access_token)
-```
-
-### T2: invalid JWT must be rejected (401)
-
-```bash
-# WHAT: send a garbage JWT to the cluster.
-# WHY: the waypoint's RequestAuthentication should validate the signature
-#   against Keycloak's JWKS and reject this. If it returns 200, the policy
-#   is broken.
-curl -si -H "Authorization: Bearer this.is.not.a.valid.jwt" \
-  http://localhost:8090/health \
-  | head -1
-# Expected: HTTP/1.1 401 Unauthorized
-```
-
-### T3: forged identity header must not bypass auth (401)
-
-```bash
-# WHAT: send a request with a forged x-user-id header but no JWT.
-# WHY: the EnvoyFilter strips this header, and the AuthorizationPolicy requires
-#   a valid JWT. The app should never see a forged x-user-id.
-curl -si -H "x-user-id: 00000000-0000-0000-0000-000000000001" \
-  http://localhost:8090/health \
-  | head -1
-# Expected: HTTP/1.1 401 Unauthorized
-```
-
-### Valid request with real JWT
-
-```bash
-# WHAT: send a request with a real JWT from Keycloak.
-# WHY: the waypoint validates it, strips any forged headers, injects the real
-#   x-user-id from the JWT sub claim, and forwards to the app.
-curl -si -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8090/health \
-  | head -1
-# Expected: HTTP/1.1 200 OK (once the register app is deployed and running)
-```
-
-### T1: direct pod access must be blocked
-
-```bash
-# WHAT: try to reach the app pod directly, bypassing the waypoint.
-# WHY: Cilium's NetworkPolicy should block all ingress to the app pod except
-#   from the waypoint. This is the network-layer enforcement that prevents
-#   forged headers even if Istio is misconfigured.
-POD_IP=$(kubectl -n register get pods \
-  -l app.kubernetes.io/name=register \
-  -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)
-
-if [ -n "$POD_IP" ]; then
-  kubectl run curltest --rm -i --restart=Never \
-    --image=curlimages/curl -- \
-    curl -s --connect-timeout 5 "http://${POD_IP}:8091/health" \
-    && echo "FAIL: direct pod access succeeded — NetworkPolicy not enforced" \
-    || echo "PASS: direct pod access blocked"
-else
-  echo "SKIP: no register pod found yet"
-fi
-```
-
-### Verify mTLS is active (encryption check)
-
-> **Why this matters**: mTLS is the foundation of the security architecture.
-
-```bash
-# Clean up the register port-forward from the setup above.
-kill $REGISTER_PF 2>/dev/null || true
-```
-> Every other security control (JWT validation, header stripping, OPA policy)
-> runs on top of the encrypted mTLS channel. If mTLS is not active, an
-> attacker on the same network could sniff pod-to-pod traffic in plain text.
->
-> These commands prove that the local k3d cluster has the same encryption
-> guarantees as production.
-
-```bash
-# WHAT: list all workloads known to ztunnel and their encryption status.
-# LOOK FOR: "HBONE" in the protocol column means traffic is encrypted via mTLS.
-#   "NONE" or "TCP" means plaintext — that workload is NOT in the mesh.
-# WHY: this is the definitive proof that ztunnel is intercepting and encrypting
-#   traffic for your pods.
-istioctl ztunnel-config workloads
-
-# WHAT: check which namespaces are enrolled in the mesh.
-# Enrolled namespaces have "istio.io/dataplane-mode=ambient" label.
-# All pods in enrolled namespaces get mTLS automatically.
-kubectl get ns --show-labels | grep ambient
-
-# WHAT: verify a specific pod has a SPIFFE identity.
-# A SPIFFE identity (like spiffe://cluster.local/ns/register/sa/register)
-# means ztunnel has issued a cryptographic certificate to this pod.
-# Without a SPIFFE identity, mTLS cannot happen.
-istioctl ztunnel-config workloads --namespace register
-
-# WHAT: proxy-status shows the connection between istiod (control plane) and
-# every ztunnel instance. "SYNCED" means ztunnel is receiving configuration.
-# If this shows "NOT CONNECTED", mTLS policies are not being applied.
-istioctl proxy-status
-```
-
-> **What does "identical to production" mean concretely?**
-> - Same ztunnel version, same eBPF interception, same certificate rotation
-> - Same SPIFFE identity format (`spiffe://cluster.local/ns/<ns>/sa/<sa>`)
-> - Same HBONE protocol (HTTP/2-based mTLS tunnel)
-> - Same `istio.io/dataplane-mode: ambient` namespace labels
-> - If a test passes here, it will pass on the Hetzner cluster
-
----
-
-## 12) The GitOps workflow — making changes
-
-The day-to-day GitOps workflow (editing files, committing, previewing changes)
-is documented in [GITOPS-OPERATIONS.md — Making changes](GITOPS-OPERATIONS.md#making-changes--the-gitops-workflow).
-The workflow is identical regardless of whether the cluster is local or
-production.
-
-The automated deploy loop (CI → GHCR → Image Updater → ArgoCD) is also
-described there at [The automated deploy loop](GITOPS-OPERATIONS.md#the-automated-deploy-loop).
-
----
-
-## 13) Rebuilding and re-importing application images
-
-> **When do you need this?** After changing application code in
-> `risquanter/register` and rebuilding. The initial build + import is
-> covered in §7.5. This section is the fast-iteration loop.
->
-> **Images are built from a separate repository**: `risquanter/register`
-> (already cloned in §7.5). This project (`register-infra`) does NOT
-> contain Dockerfiles — only the Helm charts that deploy the images.
->
-> **Image inventory (all built from `~/projects/register`):**
->
-> | Image | Build command (from `~/projects/register`) | Helm chart | k3d name |
-> |-------|-------------------------------------------|------------|----------|
-> | register-server | `docker compose build register-server` | `infra/helm/register/` | `local/register-server:dev` |
-> | irmin | `docker compose build irmin` | `infra/helm/irmin/` | `local/irmin-prod:3.11` |
-> | frontend | `docker compose build frontend` | `infra/helm/frontend/` | `local/frontend:dev` |
->
-> `docker compose build <service>` tags directly per `docker-compose.yml`'s `image:`
-> field — no separate `docker build`/`docker tag` step, and it ignores profile
-> gating (only `up`/`start` respect `profiles:`), so this works for irmin and
-> frontend even though they're profile-gated for `up`.
->
-> All Helm charts use `pullPolicy: Never` — kubelet will never attempt
-> a registry pull. `k3d image import` is the only way to update images
-> in the cluster.
-
-```bash
-# ── Rebuild, re-import, and restart ──
-cd ~/projects/register
-
-# WHAT: rebuild whichever image changed.
-docker compose build register-server
-# docker compose build frontend  # if frontend changed
-# docker compose build irmin     # if irmin changed
-
-# WHAT: import into k3d and restart the workload.
-cd ~/projects/register-infra
-k3d image import local/register-server:dev -c register-dev
-# k3d image import local/frontend:dev -c register-dev      # if frontend changed
-# k3d image import local/irmin-prod:3.11 -c register-dev   # if irmin changed
-
-kubectl -n register rollout restart deployment/register
-kubectl -n register rollout status deployment/register --timeout=60s
-# kubectl -n register rollout restart deployment/frontend   # if frontend changed
-# kubectl -n register rollout restart statefulset/irmin     # if irmin changed
-# kubectl -n register rollout status statefulset/irmin --timeout=60s
-```
-
-### Versioned import (instead of `:dev`)
-
-> **When do you need this?** The `:dev` loop above always overwrites the same
-> tag, so it's fine for the inner rebuild-test cycle but leaves no record of
-> which app version is actually running. Use a version tag when you want the
-> cluster to run — and keep — a specific `build.sbt` version, e.g. to match
-> what `infra/helm/register/values.yaml` currently pins
-> (`image.tag: "0.4.0"` at the time of writing — check the file, it may have
-> drifted from `build.sbt`'s current version).
->
-> The build side of this (`APP_VERSION` from `build.sbt`, `docker build -t
-> local/register-server:${APP_VERSION} ...`) is documented in
-> `risquanter/register`'s
-> [IMAGE-BUILD-REFERENCE.md — Application images (versioned)](../../register/docs/user/IMAGE-BUILD-REFERENCE.md#application-images-versioned).
-> `k3d image import` itself doesn't care what the tag looks like — `:dev`
-> and a version string are both just tags to it.
-
-```bash
-# ── Build a versioned image (from ~/projects/register) ──
-cd ~/projects/register
-sed -n 's/ThisBuild \/ version[[:space:]]*:= "\(.*\)"/APP_VERSION=\1/p' build.sbt > .env
-source .env
-docker build -f containers/prod/Dockerfile.register-prod -t local/register-server:${APP_VERSION} .
-# docker build -f containers/prod/Dockerfile.frontend-prod -t local/frontend:${APP_VERSION} ..   # if frontend changed
-
-# ── Import the versioned tag into k3d ──
-cd ~/projects/register-infra
-k3d image import local/register-server:${APP_VERSION} -c register-dev
-# k3d image import local/frontend:${APP_VERSION} -c register-dev   # if frontend changed
-```
-
-> **This alone does not change what's deployed.** `k3d image import` only
-> loads the image into containerd — ArgoCD still renders the chart with
-> whatever `image.tag` is set in `infra/helm/register/values.yaml` (or an
-> Application-level override). To actually roll onto the new version, update
-> that `tag:` value, commit, and let ArgoCD sync — or, for a throwaway local
-> test only, `kubectl -n register set image deployment/register
-> register=local/register-server:${APP_VERSION}` and roll back the values.yaml
-> drift this creates before the next ArgoCD sync overwrites it.
-
----
-
-## 14) Teardown
+## Teardown
 
 ```bash
 # WHAT: delete the entire k3d cluster. All pods, data, and secrets are destroyed.
 k3d cluster delete register-dev
+
+# WHAT: delete the registry container too (its pushed images go with it).
+k3d registry delete k3d-registry.localhost
 ```
 
-To recreate, run this guide from §1 (prerequisites are already installed).
-Because all GitOps state is in git, recreating a cluster from scratch takes
-only the bootstrap steps — ArgoCD redeploys everything automatically.
+To recreate, run this guide from §1 (prerequisites are already installed), then
+re-run [SECRETS-BOOTSTRAP.md §6](SECRETS-BOOTSTRAP.md#6-apply-the-secrets-to-the-cluster)
+and [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md), pushing the images again per
+[IMAGE-DEPLOY.md](IMAGE-DEPLOY.md). Because all GitOps state is in git, ArgoCD
+redeploys everything automatically.
 
 ---
 
-## 15) Next steps — graduating to production
+## Next steps — the automated track and the other points
 
-When the auth chain, GitOps workflow, and application all work locally:
-
-1. **Get a Hetzner Cloud account** (or any managed Kubernetes provider)
-2. Follow [K3S-GITOPS-BOOTSTRAP.md](K3S-GITOPS-BOOTSTRAP.md) — Terraform
-   provisions the VM and installs the same bootstrap layer (Cilium, Istio,
-   ArgoCD) that you installed manually here
-3. Point ArgoCD at the **same git repo** — it deploys the identical stack
-4. The only things that change: VM provisioning (Terraform) and secret
-   encryption at rest (`--secrets-encryption` on k3s). Secrets are already
-   managed with SOPS + age in both environments
-
-Your Helm charts, ArgoCD Applications, Istio policies, OPA rules, and
-NetworkPolicies are **portable as-is** — they do not know or care whether
-the cluster is k3d on your laptop or k3s on a Hetzner VM.
+When the auth chain, GitOps workflow, and application all work on this by-hand
+cluster, the automated track, [TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md),
+does the same platform install with Terraform — on a local k3d cluster
+(`envs/local`, points 1 and 2) or a Hetzner VM (`envs/hetzner`, point 3),
+reaching the same Platform Ready state. From there the **same**
+[SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md) and [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md)
+apply unchanged — point ArgoCD at the same git repo and it deploys the identical
+stack. The per-point differences are summarised in
+[GITOPS-ROLLOUT.md § Environment differences](GITOPS-ROLLOUT.md#environment-differences).
 
 ---
 
@@ -1609,13 +733,13 @@ the cluster is k3d on your laptop or k3s on a Hetzner VM.
 > from the NSA/CISA Kubernetes Hardening Guide and CIS Kubernetes Benchmark,
 > adapted for a local dev context.
 
-| Area | Production (Hetzner guide) | Local dev (this guide) | Why the difference is acceptable |
+| Area | Hetzner env (automated track) | Local k3d (this guide) | Why the difference is acceptable |
 |---|---|---|---|
 | Secrets at rest | k3s `--secrets-encryption` (AES-CBC) | Not available in k3d | Data is in a Docker container on your own machine |
-| Secrets in git | SOPS + age encryption | SOPS + age encryption (same) | Same encrypted files, same workflow |
+| Secrets in git | SOPS + age (YubiKey + backup) | SOPS + age (same) | Same encrypted files, same workflow |
 | Network perimeter | Hetzner firewall, CIDR-restricted SSH | Docker bridge network | No public exposure |
-| Supply chain | GHCR + digest pinning | `k3d image import` | No registry in the loop |
-| Pod Security | Restricted PSS | `register`: Restricted PSS; `infra`/`argocd`: baseline enforce, restricted audit/warn | infra workloads now pass restricted (Keycloak + PostgreSQL), upgrade pending |
+| Supply chain | GHCR + digest pinning (Image Updater) | local k3d registry (`docker push`, `IfNotPresent`) | Same registry-pull path; digest pinning added when the image-repo parameter is GHCR |
+| Pod Security | Restricted PSS | `register`: Restricted; `infra`/`argocd`: baseline enforce, restricted audit/warn | infra workloads pass restricted; upgrade pending |
 | NetworkPolicy | Default-deny + Cilium (same) | Default-deny + Cilium (same) | Same policies, same enforcement |
 | mTLS | Istio ztunnel (same) | Istio ztunnel (same) | Same mesh config |
 
@@ -1717,13 +841,6 @@ kubectl run dnstest --rm -i --restart=Never --image=busybox --timeout=15s \
 > directly to a public resolver instead of through this fragile chain:
 >
 > ```bash
-> # WHAT: patch CoreDNS to forward external DNS queries to Google's public
-> # resolver (8.8.8.8) directly, bypassing the Docker bridge → systemd-resolved
-> # chain that breaks after sleep.
-> # WHY THIS IS FINE LOCALLY: on a dev laptop the DNS chain through Docker
-> # is unreliable after sleep/network changes. Google's DNS is stable.
-> # In production (Hetzner), the VM's /etc/resolv.conf has real upstreams —
-> # this patch is not needed there.
 > kubectl -n kube-system get configmap coredns -o yaml \
 >   | sed 's|forward . /etc/resolv.conf|forward . 8.8.8.8 8.8.4.4|' \
 >   | kubectl apply -f -
@@ -1732,100 +849,81 @@ kubectl run dnstest --rm -i --restart=Never --image=busybox --timeout=15s \
 > ```
 >
 > This change does not persist across `k3d cluster delete` + recreate — k3d
-> recreates the CoreDNS ConfigMap from scratch each time. Add this patch to the
-> cluster bootstrap sequence if you recreate the cluster frequently.
+> recreates the CoreDNS ConfigMap from scratch each time.
 
-### Cilium stale `CiliumEndpoint` ownership after sleep (`controller sync-to-k8s-ciliumendpoint is failing`)
+### Cilium stale `CiliumEndpoint` ownership after sleep
 
 > **What happens**: k3d nodes are Docker containers. After a laptop sleep/wake,
-> Docker's bridge network sometimes reassigns IPs to the containers — the node
-> that was `172.18.0.2` becomes `172.18.0.3` or vice versa. Each Cilium agent
-> stamps its node IP into the `CiliumEndpoint` (CEP) objects it creates. After
-> an IP shift, the agent on the new IP sees a CEP whose embedded `hostIP`
+> Docker's bridge network sometimes reassigns IPs to the containers. Each Cilium
+> agent stamps its node IP into the `CiliumEndpoint` (CEP) objects it creates.
+> After an IP shift, the agent on the new IP sees a CEP whose embedded `hostIP`
 > belongs to a different address and refuses to take ownership.
 >
 > Symptom (`cilium status` and `kubectl -n kube-system logs -l k8s-app=cilium`):
 > ```
 > controller sync-to-k8s-ciliumendpoint (NNN) is failing since Xm (Yx):
-> endpoint sync cannot take ownership of CEP that is not local:
->   CEP's pod "istio-system/istio-cni-node-XXXXX",
->   pod's hostIP "172.18.0.2", cilium nodeIP "172.18.0.3"
+> endpoint sync cannot take ownership of CEP that is not local
 > ```
 >
 > Fix: delete the stale CEP so Cilium recreates it with the current node IP,
 > then restart the Cilium DaemonSet so all CEPs are rebuilt cleanly.
 
 ```bash
-# WHAT: Delete the stale CiliumEndpoint. Cilium will recreate it immediately
-# with the correct node IP. The pod itself is unaffected.
+# WHAT: Delete the stale CiliumEndpoint. Cilium recreates it immediately with
+# the correct node IP. The pod itself is unaffected.
 kubectl delete cep -n istio-system istio-cni-node-$(kubectl -n istio-system get pod -l k8s-app=istio-cni-node -o jsonpath='{.items[0].metadata.name}' 2>/dev/null | sed 's/istio-cni-node-//')
-# Or if the pod name suffix is known:
-# kubectl delete cep -n istio-system istio-cni-node-<suffix>
 
-# WHAT: Restart the Cilium DaemonSet so it re-registers all endpoints
-# from scratch with the current node IPs.
+# WHAT: Restart the Cilium DaemonSet so it re-registers all endpoints cleanly.
 kubectl -n kube-system rollout restart daemonset/cilium
 kubectl -n kube-system rollout status daemonset/cilium --timeout=120s
 
-# VERIFY: Should show 0 errors.
-cilium status
+cilium status   # should show 0 errors
 ```
 
-> This error is cosmetic in isolation (data-plane is unaffected — Cilium still
-> enforces policy). However it indicates stale cluster state and should be
-> resolved before trusting `cilium status` for other diagnostics.
+> This error is cosmetic in isolation (the data-plane still enforces policy) but
+> indicates stale cluster state and should be resolved before trusting
+> `cilium status` for other diagnostics.
 
 ### Pod-to-pod connections time out inside the register namespace (`HBONE port 15008`)
 
-> **What happens**: In Istio Ambient mode, ztunnel wraps all pod-to-pod
+> **What happens**: In Istio ambient mode, ztunnel wraps all pod-to-pod
 > connections in an HBONE tunnel on TCP port 15008. Cilium sees port 15008 —
-> not the application port (e.g. 8080 or 8090). If a `default-deny-all`
-> NetworkPolicy exists but no rule allows port 15008 intra-namespace, every
-> pod-to-pod connection in the namespace silently times out.
+> not the application port. If a `default-deny-all` NetworkPolicy exists but no
+> rule allows port 15008 intra-namespace, every pod-to-pod connection in the
+> namespace silently times out.
 >
 > Symptoms: register CrashLoopBackOff with `"Irmin health check timed out"`,
-> or any intra-namespace service call timing out. Per-service application-port
-> NetworkPolicy rules (e.g. register → irmin on 8080) appear correct but have
-> no effect — Cilium cannot match on the application port inside the encrypted
-> HBONE tunnel.
+> or any intra-namespace service call timing out.
 >
-> How to confirm: check ztunnel access logs for the HBONE hint:
+> How to confirm:
 
 ```bash
 kubectl -n istio-system logs -l app=ztunnel --since=10m \
   | grep -i "hbone\|15008\|network.?policy"
-# Look for: "connection timed out, maybe a NetworkPolicy is blocking HBONE port 15008"
 ```
 
-> Fix: ensure an `allow-hbone-intra-namespace` NetworkPolicy exists in the
-> namespace, allowing TCP port 15008 between all pods in that namespace.
-> This rule is already committed in `infra/k8s/network-policy/register.yaml`.
-> If you see this error, verify the NetworkPolicy is applied:
+> Fix: ensure the `allow-hbone-intra-namespace` NetworkPolicy exists — it is
+> committed in `infra/k8s/network-policy/register.yaml`:
 
 ```bash
 kubectl -n register get networkpolicy allow-hbone-intra-namespace
-# Should exist. If missing, sync the mesh-policy ArgoCD Application:
+# If missing, sync the mesh-policy ArgoCD Application:
 argocd app sync mesh-policy
 ```
 
-> **Why per-service rules are not enough**: in Ambient mode, Cilium enforces
-> application-port rules only for *cross-namespace* traffic (where HBONE is not
-> used). Within a namespace, all traffic goes through the HBONE tunnel on port
-> 15008. Intra-namespace access control is enforced by ztunnel (SPIFFE identity)
-> and the waypoint proxy (L7 HTTP policy). See
-> [ADR-INFRA-004](adr/ADR-INFRA-004.md) for the full enforcement layer model.
+> **Why per-service rules are not enough**: in ambient mode Cilium enforces
+> application-port rules only for *cross-namespace* traffic. Within a namespace,
+> all traffic goes through the HBONE tunnel on 15008; intra-namespace access
+> control is enforced by ztunnel (SPIFFE identity) and the waypoint (L7). See
+> [ADR-INFRA-004](adr/ADR-INFRA-004.md) for the enforcement layer model.
 
 ---
 
 ## Glossary, tooling overview, and detailed reference
 
-The full glossary (Kubernetes concepts, networking, authentication, GitOps),
-tooling overview, and repository layout are in the shared operations reference:
+The full glossary, tooling overview, and repository layout are in the shared
+operations reference:
 
 - [GITOPS-OPERATIONS.md — Glossary](GITOPS-OPERATIONS.md#glossary)
 - [GITOPS-OPERATIONS.md — Tooling overview](GITOPS-OPERATIONS.md#tooling-overview)
 - [GITOPS-OPERATIONS.md — Repository layout](GITOPS-OPERATIONS.md#repository-layout)
-
-> **Tip for new Kubernetes users**: skim the glossary in the shared doc before
-> starting this guide. You do not need to memorise anything, but having seen
-> the terms once makes the rest easier to follow.

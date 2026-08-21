@@ -1,8 +1,34 @@
 # ADR-INFRA-014: Multi-Environment GitOps Topology
 
-**Status:** Accepted (awaiting implementation)
+**Status:** Accepted; amended 2026-08-21 (image repo decoupled from environment)
 **Date:** 2026-07-08
 **Tags:** gitops, argocd, helm, multi-cluster, environments, blast-radius
+
+---
+
+## Amendment (2026-08-21) — image repo is its own axis
+
+The original Decision 2 treated `image.repository` as an environment-coupled
+field: a `values-local.yaml` overlay set the local k3d registry and a
+`values-hetzner.yaml` overlay set GHCR, so choosing a registry meant choosing an
+environment. That coupling is **overruled**. There are two independent axes:
+
+- **image-repo** (`local-registry` ↔ `GHCR`) — where app pods pull images. For
+  the home-built charts (`register`, `irmin`, `frontend`) this is now its own
+  overlay pair, **decoupled from the cluster**: `values-localreg.yaml` and
+  `values-ghcr.yaml`. Switching is a one-line `helm.valueFiles` change on any
+  cluster.
+- **cluster** (local k3d ↔ Hetzner) — where Kubernetes runs. Keycloak, which has
+  no image-repo choice (upstream image), keeps a `values-local.yaml` /
+  `values-hetzner.yaml` overlay carrying the cluster-axis realm file.
+
+This makes three combinations first-class and tested: local-registry+local,
+GHCR+local, GHCR+Hetzner (the fourth, local-registry+Hetzner, is nonsensical).
+The reason GHCR+local is worth its own supported point: GHCR authentication (PAT
+scopes, private-package visibility, the `ghcr-pull` secret) is genuine,
+non-trivial learning, and debugging it on a familiar local cluster before adding a
+VM is valuable isolation. See [START-HERE.md](../START-HERE.md) and
+[IMAGE-DEPLOY.md](../IMAGE-DEPLOY.md). Decisions 1, 3, and 4 below are unchanged.
 
 ---
 
@@ -42,21 +68,23 @@ which each pulls independently.
 ### 2. Helm charts: shared `values.yaml` + one overlay file per environment
 
 ```yaml
-# infra/argocd/apps/register.yaml (separate copy per cluster's ArgoCD instance)
+# infra/argocd/apps/register.yaml — image-repo axis (see Amendment above)
 spec:
   source:
     path: infra/helm/register
     helm:
       valueFiles:
         - values.yaml
-        - values-local.yaml      # or values-hetzner.yaml on the Hetzner instance
+        - values-localreg.yaml   # image repo; swap → values-ghcr.yaml for GHCR
 ```
 
-Scope, decided by surveying every chart for genuine environment coupling (image
-provenance/pull policy, hostname, realm file) rather than applying overlays
-uniformly: `register`, `keycloak`, `frontend`, `irmin`. `opa` and `spicedb` pull
-digest-pinned images from a public registry identically in both environments and
-need no overlay.
+Scope, decided by surveying every chart for genuine coupling rather than applying
+overlays uniformly. The home-built charts (`register`, `frontend`, `irmin`) have
+the **image-repo** overlay (`values-localreg.yaml` / `values-ghcr.yaml`, per the
+Amendment). `keycloak` has a **cluster** overlay (`values-local.yaml` /
+`values-hetzner.yaml`) carrying the realm file — no image-repo choice, upstream
+image. `opa` and `spicedb` pull digest-pinned public images identically everywhere
+and need no overlay.
 
 ### 3. Raw manifests: `shared/` + one directory per environment
 
@@ -91,10 +119,12 @@ image:
 ```
 
 ```yaml
-# GOOD: environment identified by which overlay file is layered on
+# GOOD: image repo identified by which overlay file is layered on (Amendment)
 # values.yaml (shared): replicaCount, resource limits, non-env app config
-# values-local.yaml:   repository: local/register-server, tag: dev, pullPolicy: Never
-# values-hetzner.yaml: repository: ghcr.io/risquanter/register-server, pullPolicy: IfNotPresent
+# values-localreg.yaml: repository: k3d-registry.localhost:5000/register-server
+# values-ghcr.yaml:     repository: ghcr.io/risquanter/register-server, imagePullSecrets: [ghcr-pull]
+# tag and pullPolicy: IfNotPresent are identical for both, so they stay in the shared
+# values.yaml — only image.repository, the genuinely divergent field, is overlaid.
 ```
 
 ### ❌ Single ArgoCD instance holding a remote cluster credential
@@ -118,7 +148,8 @@ spec:
 | Location | Pattern |
 |----------|---------|
 | `infra/argocd/apps/*.yaml` (one set per cluster) | `destination.server: https://kubernetes.default.svc` only — never a remote cluster |
-| `infra/helm/register/`, `keycloak/`, `frontend/`, `irmin/` | `values.yaml` + `values-local.yaml` / `values-hetzner.yaml` |
+| `infra/helm/register/`, `frontend/`, `irmin/` | `values.yaml` + image-repo overlay `values-localreg.yaml` / `values-ghcr.yaml` |
+| `infra/helm/keycloak/` | `values.yaml` + cluster overlay `values-local.yaml` / `values-hetzner.yaml` (realm file) |
 | `infra/k8s/shared/`, `infra/k8s/local/`, `infra/k8s/hetzner/` | Raw-manifest environment split |
 | `infra/argocd/apps/mesh-policy.yaml` (one per cluster) | Multi-source: `infra/k8s/shared` + `infra/k8s/<env>` |
 

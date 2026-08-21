@@ -46,7 +46,7 @@ Every artifact is pinned to an immutable reference. Mutable tags (`latest`, `mai
 | Container image | Digest (`sha256:...`). Tag is documentation only. Image Updater writes digests. |
 | Helm chart | Exact `targetRevision` string (`"18.5.5"`, `"3.7.1"`) |
 | GitHub Action | Full commit SHA (`uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`) |
-| Terraform provider | Exact version constraint (`version = "= 1.9.8"`) in `versions.tf` |
+| Terraform provider | Exact version constraint (`version = "= 1.9.8"`) in the config (`versions.tf` or `main.tf`) plus a committed `.terraform.lock.hcl` recording the checksums |
 | IDE extension | Specific version in `.vscode/extensions.json` or equivalent lockfile |
 
 ### 4. Cooldown Periods
@@ -84,12 +84,34 @@ Every newly introduced or upgraded external artifact at T1 or T2 requires a comm
 
 When a vendor does not publish an official Helm chart, write a local chart under `infra/helm/`. A chart for a single Deployment + Service + Secret reference is 50–100 lines of YAML. The authorship cost is low; the supply chain cost of substituting a community chart is unbounded. The full chart sourcing policy, including the conditions under which an upstream chart is admissible, is ADR-INFRA-016.
 
-Currently approved upstream Helm charts (all others require a new entry in this table):
+The chart-sourcing rule governs **every** chart installed into the cluster, whether
+ArgoCD applies it or the Terraform Helm provider does at bootstrap (ADR-INFRA-016 §1).
+Approved upstream charts are recorded below; all others require a new entry here.
+
+**ArgoCD-applied workloads:**
 
 | Chart | Vendor repo | Cooldown elapsed | Reviewed |
 |---|---|---|---|
 | `bitnami/postgresql` | `https://charts.bitnami.com/bitnami` | Pre-ADR | 2026-07-05 |
 | `kyverno/kyverno` | `https://kyverno.github.io/kyverno/` | Pre-ADR | 2026-07-05 |
+
+**Terraform-installed platform charts** — the bootstrap layer, installed by the Helm
+provider in `infra/terraform/modules/platform/main.tf` and pinned by exact chart
+version in `infra/terraform/modules/platform/variables.tf`. All are official charts published by the software's
+own CNCF project, so the §2 vendor-identity requirement is met and a local chart is
+not preferred (Cilium and Istio charts are too complex to reproduce locally):
+
+| Chart | Vendor repo | Version | Security disclosure | Cooldown elapsed | Reviewed |
+|---|---|---|---|---|---|
+| `cilium/cilium` | `https://helm.cilium.io` | 1.17.0 | `github.com/cilium/cilium/security/policy` | Pre-ADR | 2026-08-19 |
+| `istio` (base·cni·ztunnel·istiod) | `https://istio-release.storage.googleapis.com/charts` | 1.25.0 | `github.com/istio/istio/security/policy` | Pre-ADR | 2026-08-19 |
+| `jetstack/cert-manager` | `https://charts.jetstack.io` | 1.17.0 | `github.com/cert-manager/cert-manager/security/policy` | Pre-ADR | 2026-08-19 |
+| `argoproj/argo-cd` | `https://argoproj.github.io/argo-helm` | 7.8.0 | `github.com/argoproj/argo-cd/security/policy` | Pre-ADR | 2026-08-19 |
+| `argoproj/argocd-image-updater` | `https://argoproj.github.io/argo-helm` | 0.11.0 | `github.com/argoproj/argo-helm/security/policy` | Pre-ADR | 2026-08-19 |
+
+The Terraform **providers** carry their own §6 approval records inline in each env
+root's `versions.tf`: `envs/hetzner` uses all four (hcloud, helm, cloudinit, null);
+`envs/local` uses helm and null.
 
 ---
 
@@ -176,6 +198,8 @@ source:
 | `infra/argocd/apps/postgresql.yaml` | T1 approved upstream with approval record |
 | `infra/argocd/apps/kyverno.yaml` | T1 approved upstream with approval record |
 | `infra/argocd/apps/spicedb.yaml` | Local chart — official T1 chart unavailable (ADR-INFRA-016) |
+| `infra/terraform/envs/*/versions.tf` (providers) | T1/T4 Terraform providers — exact `=` pin + §6 approval record; checksums in each env root's committed `.terraform.lock.hcl` |
+| `infra/terraform/modules/platform/main.tf` (Helm releases) | T1 platform charts — approved upstream, exact version pinned in `modules/platform/variables.tf`, recorded in §7 |
 | `.github/workflows/*.yaml` | GitHub Actions — SHA pinning required (T3) |
 
 ---

@@ -1,59 +1,83 @@
-# k3s GitOps Bootstrap — Hetzner Cloud Production Deployment
+# Terraform Bootstrap — the automated track
 
-Declarative, reproducible cluster provisioning for Hetzner Cloud using
-Terraform, Cilium, Istio ambient, and ArgoCD.
+Declarative, reproducible cluster provisioning with Terraform, Cilium, Istio
+ambient, and ArgoCD. This is the **automated track**: one Terraform codebase
+creates the cluster and installs the platform layer up to **Platform Ready** — the
+cut-off point where GitOps takes over — then hands off to the shared secrets and
+rollout guides. The other track is [MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md),
+which reaches the same Platform Ready state by hand. See
+[START-HERE.md](START-HERE.md) for the full map.
 
-- **Target**: single-node k3s on a Hetzner Cloud VM (adaptable to any bare Linux VM)
+The codebase has two env roots and covers all three supported points:
+
+| Env root | Cluster | Points | Command |
+|---|---|---|---|
+| `infra/terraform/envs/local` | local k3d | 1 (`create_local_registry=true`), 2 (`=false`) | `cd infra/terraform/envs/local && terraform apply` |
+| `infra/terraform/envs/hetzner` | Hetzner VM | 3 (GHCR) | `cd infra/terraform/envs/hetzner && terraform apply` |
+
+Both roots install the same shared platform module
+(`infra/terraform/modules/platform`), so the cluster reached is identical.
+
+- **Targets**: local k3d (k3s-in-Docker) or single-node k3s on a Hetzner Cloud VM
 - **Principle**: every cluster state change is a `git push` or a `terraform apply` — no imperative commands after bootstrap
-- **Secret strategy**: SOPS + age + YubiKey — hardware-backed dual-recipient encryption, no external secret manager
+- **Secret strategy**: SOPS + age + YubiKey, two recipients (YubiKey + offline backup) — see [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md)
 - **GitOps engine**: ArgoCD with App of Apps pattern
 
-> **New to Kubernetes?** Start with the
-> [LOCAL-K3D-BOOTSTRAP.md](LOCAL-K3D-BOOTSTRAP.md) guide first — it runs the
-> identical GitOps stack on your machine without needing a cloud account, and
-> explains every concept in tutorial style. Come back here when you are ready
-> to deploy to a remote server.
+> **New to Kubernetes?** The platform components (what each is and why it is
+> installed in this order) are documented once in
+> [GITOPS-OPERATIONS.md § Platform components](GITOPS-OPERATIONS.md#platform-components--what-each-layer-is-and-why),
+> and every term is defined in the [Glossary](GITOPS-OPERATIONS.md#glossary). The
+> [MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md) track installs the same platform by
+> hand, one component at a time, if you would rather learn it that way first — but
+> it is not a prerequisite for this one.
 
 ---
 
 ## How this guide relates to the other docs
 
-| Document | Purpose | When to use |
-|---|---|---|
-| [LOCAL-K3D-BOOTSTRAP.md](LOCAL-K3D-BOOTSTRAP.md) | Local dev cluster on your machine | First step — learn and validate |
-| **This guide** | Production deploy to Hetzner Cloud via Terraform | After local validation works |
-| [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Shared GitOps reference (ArgoCD apps, workflow, glossary) | After bootstrap completes |
-| [K8S-TESTING.md](K8S-TESTING.md) | Validation and CI pipeline | After cluster is running |
-| [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture | Reference during auth testing |
+Read in this order:
 
-> **What is Hetzner-specific here?** Terraform provider configuration,
-> cloud-init, Hetzner firewall rules, and VM provisioning. Everything in the
-> GitOps layer (ArgoCD Applications, Helm charts, Istio policies, OPA rules,
-> NetworkPolicies) is **portable** — identical between this guide and the local
-> k3d guide.
+| Order | Document | Purpose |
+|---|---|---|
+| **1 (this guide)** | Terraform provisioning (local k3d or Hetzner VM) | Create the cluster + install the platform → Platform Ready |
+| 2 | [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md) | Create + apply the SOPS/age/YubiKey secrets (shared) |
+| 3 | [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md) | Enroll ArgoCD, connect git, apply the root app, run tests (shared) |
+| 4 | [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md) | Build → push → rollout; the image-repo axis (local registry vs GHCR) |
+| ref | [GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md) | Platform component concepts, day-to-day GitOps workflow, repo layout, glossary |
+| ref | [MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md) | The by-hand track — the same platform, installed one component at a time |
+| ref | [SECURITY-FLOW.md](SECURITY-FLOW.md) | Auth chain architecture |
+
+> **What differs by env root?** `envs/hetzner` adds the Hetzner provider config,
+> cloud-init, firewall rules, and VM provisioning; `envs/local` wraps the k3d CLI
+> to create a local cluster (and, for point 1, a local registry). Both call the
+> same `modules/platform`. Everything from the secrets bootstrap onward (steps
+> 2–4) is **shared** — the per-point differences (git-auth method, TLS issuer,
+> image repo) are called out in
+> [GITOPS-ROLLOUT.md § Environment differences](GITOPS-ROLLOUT.md#environment-differences)
+> and [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md).
 
 ---
 
 ## The bootstrap boundary
 
-> **This concept is explained fully in the local guide.** Here is the summary.
-
-There are exactly two layers:
+The whole build divides into exactly two layers, and the split is the reason the
+guides are ordered the way they are:
 
 1. **Bootstrap layer** — Terraform provisions the VM and installs the platform
    (k3s, Cilium, Istio, cert-manager, ArgoCD) via the Helm provider. This is
-   run once by the operator.
+   run once by the operator (this guide).
 2. **GitOps layer** — ArgoCD manages everything above the platform. Changes
    happen through git commits. ArgoCD detects and applies them automatically.
 
-The boundary is the moment you `kubectl apply -f infra/argocd/apps/root.yaml`.
+The boundary is the moment you `kubectl apply -f infra/argocd/apps/root.yaml`
+(in [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md)).
 
 ```
 ╔═══════════════════════════════════════════════════════════════╗
 ║  GITOPS LAYER — ArgoCD manages from git                      ║
 ║                                                               ║
 ║  Namespaces + Pod Security    ← infra/helm/namespaces/        ║
-║  PostgreSQL / Keycloak        ← infra/argocd/apps/            ║
+║  PostgreSQL / Keycloak / SpiceDB ← infra/argocd/apps/         ║
 ║  Istio auth policies          ← infra/k8s/istio/              ║
 ║  OPA policies                 ← infra/k8s/opa/                ║
 ║  NetworkPolicies              ← infra/k8s/network-policy/     ║
@@ -61,9 +85,13 @@ The boundary is the moment you `kubectl apply -f infra/argocd/apps/root.yaml`.
 ╠═══════════════════════════════════════════════════════════════╣
 ║  BOOTSTRAP LAYER — Terraform + one-time manual steps          ║
 ║                                                               ║
-║  Terraform: Hetzner VM, firewall, network, cloud-init         ║
-║  Terraform Helm provider: Cilium, Istio, cert-manager, ArgoCD ║
-║  Manual: password rotation, SOPS key, git repo, root app      ║
+║  THIS GUIDE (envs/local or envs/hetzner):                    ║
+║  Terraform: k3d cluster, or Hetzner VM/firewall/network       ║
+║  modules/platform: Cilium, Istio, cert-manager, ArgoCD        ║
+║                                                               ║
+║  SECRETS-BOOTSTRAP.md:  SOPS + age + YubiKey secrets          ║
+║  GITOPS-ROLLOUT.md:     mesh-enroll ArgoCD → connect git      ║
+║                         → root app  ← the handoff moment      ║
 ╚═══════════════════════════════════════════════════════════════╝
 ```
 
@@ -74,61 +102,137 @@ The boundary is the moment you `kubectl apply -f infra/argocd/apps/root.yaml`.
 See [GITOPS-OPERATIONS.md — Repository layout](GITOPS-OPERATIONS.md#repository-layout)
 for the full annotated tree (kept in one place to avoid drift between guides).
 
+The Terraform tree:
+
+```
+infra/terraform/
+  modules/platform/     shared Helm layer — Cilium, Istio, cert-manager, ArgoCD,
+                        Image Updater (target-independent)
+  envs/local/           local k3d cluster + optional local registry → modules/platform
+  envs/hetzner/         Hetzner VM (network, firewall, cloud-init) → modules/platform
+```
+
+Each env root is a separate Terraform root with its own state and its own
+`.terraform.lock.hcl`. Running one never touches the other's cluster.
+
+---
+
+## The local env root (points 1 & 2)
+
+This is the automated equivalent of [MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md):
+Terraform wraps the k3d CLI to create the cluster (and, for point 1, a local
+registry), then installs the platform module — reaching the same Platform Ready
+state. It needs no cloud account.
+
+**Prerequisites** (operator machine): Docker running, plus the `k3d`, `kubectl`,
+and `helm` CLIs — install them per [MANUAL-BOOTSTRAP.md §0](MANUAL-BOOTSTRAP.md).
+No Hetzner token, no SSH key.
+
+```bash
+cd infra/terraform/envs/local
+terraform init
+
+# Point 1 (local-registry): create a k3d registry the cluster pulls from.
+terraform apply -var create_local_registry=true
+
+# Point 2 (GHCR): no local registry; apps pull from GHCR (needs the ghcr-pull
+# secret from SECRETS-BOOTSTRAP.md, and the values-ghcr overlay).
+# terraform apply -var create_local_registry=false
+
+export KUBECONFIG="$PWD/kubeconfig.yaml"
+kubectl get nodes
+kubectl -n argocd get pods    # ArgoCD Running → Platform Ready
+```
+
+Teardown: `terraform destroy` (deletes the k3d cluster and, if created, the
+registry). The rest of this guide (§0–§2) is the **Hetzner env root (point 3)**.
+
 ---
 
 ## Prerequisites — container images
 
-> **Unlike the local k3d workflow** (where images are built on your machine and
-> imported with `k3d image import`), a remote k3s cluster must **pull** images
-> from a container registry. This guide assumes images are hosted on **GHCR**
-> (GitHub Container Registry).
+Hetzner (point 3) and local-GHCR (point 2) both use the **GHCR** image-repo:
+the three locally-built images (`register-server`, `irmin-prod`, `frontend`) are
+pulled from `ghcr.io/risquanter/<image>` with `pullPolicy: IfNotPresent`, applied
+via each chart's `values-ghcr.yaml` overlay (the ArgoCD Application layers it in
+`helm.valueFiles`). The build → push → rollout loop and that overlay are
+documented once in [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md); the images must be in GHCR
+before the root app sync
+([GITOPS-ROLLOUT.md §5](GITOPS-ROLLOUT.md#5-ensure-application-images-are-in-the-registry)).
+The public upstream images (PostgreSQL, Keycloak, SpiceDB, OPA, nginx) pull
+directly and need no action. (Point 1 pulls from the local registry instead — no
+GHCR, no pull secret; see [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md).)
 
-The following application images must be available before §4 (ArgoCD sync):
+The one image prerequisite for the **GHCR points** is the pull secret — part of
+[Platform Ready checklist #8](GITOPS-ROLLOUT.md#platform-ready--the-precondition):
 
-| Image | Source | Description |
-|---|---|---|
-| `ghcr.io/risquanter/register-server` | `risquanter/register` repo | Register application (GraalVM native distroless) |
-| `ghcr.io/risquanter/irmin` | `risquanter/register` repo | Irmin content-addressed store (GraphQL API) |
+- **GHCR pull secret** — if the GHCR packages are private, create a GitHub PAT
+  with `read:packages` scope, store it as a SOPS-encrypted Kubernetes Secret
+  named `ghcr-pull`, and reference it via `imagePullSecrets` (the `values-ghcr.yaml`
+  overlays already do). Applied in [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md).
 
-**Outstanding work required (not yet implemented):**
+**Outstanding work (not yet implemented):** a GitHub Actions pipeline to build
+the three images on push to `main`, tag `:git-sha`, and push to GHCR (tracked in
+AUTHORIZATION-PLAN.md phase K.2). Until it exists — or you push the images by hand
+per [IMAGE-DEPLOY.md](IMAGE-DEPLOY.md) — ArgoCD shows the `register` and `frontend`
+Applications as **Degraded** (ImagePullBackOff) after the root app syncs.
 
-1. **GitHub Actions CI/CD pipeline** — build both images on push to `main`,
-   tag as `:git-sha` (and optionally `:latest`), push to GHCR.
-   Tracked in AUTHORIZATION-PLAN.md phase K.2.
-2. **GHCR authentication** — if the GHCR packages are private, the cluster
-   needs an `imagePullSecret`. Create a GitHub PAT with `read:packages` scope,
-   store it as a SOPS-encrypted Kubernetes Secret, and reference it in the
-   Helm values (`imagePullSecrets`).
-3. **Helm values overrides for production** — each chart's `values.yaml`
-   currently targets local images (`pullPolicy: Never`). Production needs:
-   - `register`: `image.repository: ghcr.io/risquanter/register-server`,
-     `image.pullPolicy: IfNotPresent`
-   - `irmin`: `image.repository: ghcr.io/risquanter/irmin`,
-     `image.pullPolicy: IfNotPresent`
-4. **ArgoCD Image Updater** (optional) — auto-detect new image tags in GHCR
-   and update the running workloads.
+---
 
-> Until items 1–3 are complete, ArgoCD will show the `register` and `irmin`
-> Applications as **Degraded** (ImagePullBackOff) after bootstrap.
+## Before you begin — the Phase 4 gate
+
+> **Gate (decided 2026-07-08): do not provision Hetzner until the local cluster
+> passes.** The Hetzner rollout (Phase 4) does not start until L2 Path Steps 1–4
+> are complete and verified locally, with Step 5 ("Usable Exposure") passing
+> against the local k3d cluster. Provisioning paid infrastructure before
+> fine-grained authorization works locally means debugging auth issues on
+> Hetzner instead of on localhost — strictly worse. Track status in
+> [TODO.md § Phase 4](TODO.md).
+
+This is the only ordering dependency on the local cluster. The provisioning steps
+below (§0–§2) are otherwise self-contained: you can read and understand them on
+their own, and the gate is about *when* to run them, not *how*.
 
 ---
 
 ## 0) Workstation setup
 
 > **These tools run on YOUR machine**, not on the cluster. They talk to Hetzner
-> Cloud (hcloud, Terraform) and to the Kubernetes API (kubectl, ArgoCD CLI).
+> Cloud (hcloud, Terraform) and to the Kubernetes API (kubectl, ArgoCD CLI). The
+> YubiKey plugin (`age-plugin-yubikey`) is installed in
+> [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md).
 
-> **Security note — `curl | bash` pattern**: tool installers below use the
-> convenience `curl <url> | bash` pattern. For CI/production pipelines, prefer
-> pinned binary downloads with checksum verification (shown where available).
+> **Security note — install method**: the workstation tools below are installed
+> as pinned binaries verified by checksum (and, for Terraform, by GPG signature),
+> or from distro/vendor package repos — no `curl <url> | bash`. The one
+> `curl | bash` in this guide is k3s inside the VM's cloud-init (§2), which trusts
+> the k3s download server at provision time; that risk is noted where it occurs.
 
 ```bash
 # ── Terraform ── infrastructure provisioner
-# WHAT: tfswitch lets you pin Terraform versions per-project, preventing
-#   version drift between team members.
-# WHY: Terraform 1.10+ is required for provider features used in main.tf.
-curl -fsSL https://tfswitch.warrensbox.com/install.sh | bash
-tfswitch 1.10.0
+# WHAT: pinned binary, checksum-verified, plus a GPG signature check on the
+#   checksum manifest (HashiCorp signs it, so this proves authenticity — not
+#   just that the zip matches a manifest fetched from the same server).
+# WHY: main.tf sets required_version >= 1.10; pin a specific stable release.
+# SECURITY: matches the sops/argocd pattern below (no `curl | bash`).
+TERRAFORM_VERSION=1.15.8
+TF_BASE="https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}"
+curl -fsSLO "${TF_BASE}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+curl -fsSLO "${TF_BASE}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+curl -fsSLO "${TF_BASE}/terraform_${TERRAFORM_VERSION}_SHA256SUMS.sig"
+# authenticity: import HashiCorp's PGP key and verify it signed the manifest
+curl -fsSL https://www.hashicorp.com/.well-known/pgp-key.txt | gpg --import
+gpg --verify "terraform_${TERRAFORM_VERSION}_SHA256SUMS.sig" \
+             "terraform_${TERRAFORM_VERSION}_SHA256SUMS"   # expect: Good signature
+# integrity: the zip matches the (now-trusted) manifest
+grep "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+     "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum --check
+unzip -o "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" terraform -d .
+sudo install -m755 terraform /usr/local/bin/terraform
+rm -f terraform "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+      "terraform_${TERRAFORM_VERSION}_SHA256SUMS" \
+      "terraform_${TERRAFORM_VERSION}_SHA256SUMS.sig"
+terraform version   # expect: Terraform v1.15.8
 
 # ── Hetzner Cloud CLI ── API token management and SSH key upload
 # macOS:
@@ -139,14 +243,9 @@ brew install hcloud
 #   tar xzf hcloud-linux-amd64.tar.gz && sudo install -m755 hcloud /usr/local/bin/hcloud
 
 # ── age ── modern encryption tool; replaces GPG for SOPS
-# WHAT: age generates keypairs for encrypting/decrypting secrets in git.
-# WHY: simpler and more auditable than GPG. One keypair, no keychain complexity.
 sudo apt install -y age     # Debian/Ubuntu
 
 # ── SOPS ── encrypts/decrypts secret files using age keys
-# WHAT: SOPS encrypts YAML values while leaving keys visible (for auditability).
-# WHY: secrets can be committed to git safely — only the encrypted ciphertext
-#   is stored. Decryption requires the age private key.
 # SECURITY: verify checksum after download.
 SOPS_VERSION=$(curl -fsSL https://api.github.com/repos/getsops/sops/releases/latest | jq -r .tag_name)
 curl -fsSLO "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64"
@@ -167,252 +266,7 @@ rm -f argocd-linux-amd64 cli_checksums.txt
 
 ---
 
-## 1) Secrets bootstrap (age + SOPS + YubiKey)
-
-> **What is happening here?** You set up a **dual-recipient** encryption
-> model: your YubiKey holds the primary private key (hardware-bound, non-
-> exportable), and a software key is generated for ArgoCD cluster-side
-> decryption. Every secret file is encrypted to **both** recipients — either
-> one can independently decrypt. For a deep explanation of the cryptographic
-> model, primitives, and use-case walk-throughs, see
-> [SOPS-YUBIKEY-MODEL.md](SOPS-YUBIKEY-MODEL.md).
->
-> **Why dual-recipient?** ArgoCD must decrypt autonomously at sync time (no
-> human present). A YubiKey-only setup would block all automated syncs. The
-> software key is the unavoidable concession to automation — but it never
-> sits as plaintext on disk. It is encrypted to your YubiKey in the repo
-> and injected into the cluster once (§4.2).
->
-> **Why not HashiCorp Vault or AWS KMS?** At this scale (single operator,
-> single cluster), SOPS + age provides equivalent security for secrets at rest
-> without the operational overhead of a running secrets service. Graduate to
-> Vault when you have multiple teams or compliance requirements that mandate
-> centralized secret management.
-
-### 1.0 Install age-plugin-yubikey
-
-> **What is this?** The plugin lets age use your YubiKey's PIV applet for
-> encryption/decryption. The private key is generated **on the YubiKey chip**
-> — it never exists on disk, cannot be exported, and requires physical touch
-> to use.
-
-```bash
-# WHAT: pcscd is the smart card daemon. Required for YubiKey PIV communication.
-sudo apt-get install -y pcscd libpcsclite-dev
-
-# WHAT: install the age YubiKey plugin.
-# Option A — cargo (if Rust toolchain is available):
-cargo install age-plugin-yubikey
-
-# Option B — pre-built binary:
-# See https://github.com/str4d/age-plugin-yubikey/releases
-# Download, verify checksum, install to /usr/local/bin/age-plugin-yubikey
-```
-
-### 1.1 Generate YubiKey age identity
-
-```bash
-# WHAT: generate a new age identity inside a YubiKey PIV slot.
-#   The private key is created ON the chip — it never touches disk.
-#   The interactive wizard prompts for slot selection and PIN/touch policy.
-# SECURITY: choose touch-policy=always so every decryption requires
-#   physical touch on the YubiKey.
-age-plugin-yubikey
-
-# WHAT: print the YubiKey recipient (public key) for use in .sops.yaml.
-# NOTE: copy this — it looks like: age1yubikey1q...
-age-plugin-yubikey --list
-```
-
-### 1.2 Generate software key for cluster-side decryption
-
-```bash
-# WHAT: generate a standard age keypair. This key is for ArgoCD — it will
-#   live inside the cluster as a Kubernetes Secret.
-# SECURITY: we generate it to a temporary file, encrypt it to the YubiKey
-#   in Step 1.4, then shred the plaintext. It NEVER persists on disk
-#   unencrypted after this section.
-age-keygen -o /tmp/cluster-age-key.txt
-
-# NOTE: copy the public key from the output — it looks like:
-#   age1xxxxxxxxxxxxxxxxxxxxxxxxx
-# You will need BOTH public keys (YubiKey + this one) for .sops.yaml below.
-```
-
-### 1.3 Configure SOPS with dual recipients
-
-```bash
-# WHAT: tell SOPS to encrypt files to BOTH recipients.
-# HOW IT WORKS: when you run `sops infra/secrets/foo.yaml`, SOPS creates a
-#   random DATA_KEY, encrypts the file with it, then encrypts the DATA_KEY
-#   separately to each recipient. Either private key can recover the DATA_KEY.
-cat > .sops.yaml <<YAML
-creation_rules:
-  - path_regex: infra/secrets/.*\.yaml$
-    age: >-
-      age1yubikey1qXXXXXXXXXXXX,
-      age1XXXXXXXXXXXXXXXXXXXXXX
-YAML
-# ↑ Replace the first with your YubiKey recipient (from §1.1)
-#   Replace the second with the software public key (from §1.2)
-```
-
-### 1.4 Protect the software key with your YubiKey
-
-```bash
-# WHAT: encrypt the cluster software key to ONLY the YubiKey recipient.
-#   This creates a file that can only be decrypted by someone holding
-#   the physical YubiKey.
-# WHY: so the software key can live safely in the repo. When you need to
-#   re-inject it into a new cluster (§4.2), you decrypt it with a touch.
-sops --encrypt \
-  --age "$(age-plugin-yubikey --list | grep '^age1')" \
-  --input-type binary \
-  --output infra/secrets/cluster-age-key.enc.yaml \
-  /tmp/cluster-age-key.txt
-
-# SECURITY: shred the plaintext software key from disk immediately.
-shred -u /tmp/cluster-age-key.txt
-
-# VERIFICATION: the plaintext key is gone.
-ls /tmp/cluster-age-key.txt  # should fail: No such file or directory
-```
-
-### 1.5 Create and encrypt application secrets
-
-```bash
-# WHAT: sops opens your $EDITOR with a plain YAML file.
-#   Write the secret values in plain text, save and close.
-#   SOPS encrypts the values on exit — keys stay human-readable.
-#   The file is encrypted to BOTH recipients (per .sops.yaml).
-sops infra/secrets/postgres.enc.yaml
-```
-
-Example content (plain text — SOPS encrypts this on save):
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-credentials
-  namespace: infra
-type: Opaque
-stringData:
-  postgres-password: "REPLACE_WITH_STRONG_PASSWORD"
-  keycloak-db-password: "REPLACE_WITH_STRONG_PASSWORD"
-```
-
-```bash
-# WHAT: create and encrypt the Keycloak admin credentials file.
-sops infra/secrets/keycloak.enc.yaml
-```
-
-```bash
-# VERIFICATION: view the encrypted file — values are ciphertext, keys are plain.
-# You will see TWO recipient blocks in the sops metadata (YubiKey + software).
-cat infra/secrets/postgres.enc.yaml
-
-# Safe to commit — ciphertext is meaningless without a private key.
-git add .sops.yaml infra/secrets/
-git commit -m "chore: add SOPS config and encrypted secrets (dual-recipient)"
-```
-
-> **Key custody summary** (see [SOPS-YUBIKEY-MODEL.md — What lives
-> where](SOPS-YUBIKEY-MODEL.md#what-lives-where) for the full table):
->
-> | Artifact | Location |
-> |---|---|
-> | YubiKey private key | YubiKey chip (non-exportable) |
-> | Software private key (encrypted) | `cluster-age-key.enc.yaml` in repo |
-> | Software private key (plaintext) | Kubernetes Secret only (shredded from disk) |
-> | Both public keys | `.sops.yaml` in repo |
->
-> There is **no single plaintext file** that unlocks everything. The
-> YubiKey is the root of trust. If the YubiKey is lost, you cannot
-> decrypt `cluster-age-key.enc.yaml` — you would need to re-create all
-> secrets from scratch.
-
-### 1.6 Application-specific database credentials (future — when PG is wired in)
-
-> **Skip this section now.** The register app uses Irmin for risk tree
-> persistence (`repositoryType=irmin`) and in-memory for workspace metadata
-> (`TrieMap` / `Ref[Map]`). This section documents the credential strategy for
-> when `WorkspaceStorePostgres` is implemented. It is here so the design is
-> recorded alongside the secret creation steps.
-
-The `postgres-credentials` Secret in the `infra` namespace contains two keys:
-
-| Key | Who uses it | Purpose |
-|---|---|---|
-| `postgres-password` | Bitnami PostgreSQL chart | Sets the `postgres` superuser password on DB init |
-| `keycloak-db-password` | Keycloak local chart | Connects as `bn_keycloak` to the `keycloak` database |
-
-**The register app must NOT use either of these keys.** The superuser password
-grants full DDL/DML over all databases, and the Keycloak password is scoped to
-a different database and user. Using them would violate least-privilege and
-create a cross-service credential coupling.
-
-Instead, when the register app needs PostgreSQL, create a **separate
-SOPS-encrypted Secret** scoped to the `register` namespace:
-
-```bash
-sops infra/secrets/register-db.enc.yaml
-```
-
-Example content:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: register-db-credentials
-  namespace: register            # ← lives in the app namespace, not infra
-type: Opaque
-stringData:
-  # Password for the dedicated register_app PostgreSQL role.
-  # This role is created by an initdb script in the PostgreSQL chart
-  # (auth.username / auth.database configuration).
-  register-db-password: "REPLACE_WITH_STRONG_PASSWORD"
-```
-
-Then add the corresponding PostgreSQL `initdb` configuration to
-[postgresql.yaml](../infra/argocd/apps/postgresql.yaml):
-
-```yaml
-# Inside valuesObject:
-auth:
-  existingSecret: postgres-credentials
-  secretKeys:
-    adminPasswordKey: postgres-password
-  # Create a dedicated role for the register app (least-privilege).
-  # The Bitnami chart auto-creates this user with GRANT on the specified DB.
-  username: register_app
-  password: ""                              # read from initdbScriptsSecret
-  database: register_app
-```
-
-And reference it in the register Helm chart's `values.yaml`:
-
-```yaml
-env:
-  - name: DB_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: register-db-credentials       # ← register namespace Secret
-        key: register-db-password
-```
-
-> **Why two SOPS files instead of one?** Kubernetes Secrets are namespace-scoped.
-> The `infra` namespace cannot read a Secret from `register` and vice versa.
-> The password value is the same in both files (the `initdb` script and the app
-> must agree), but it is expressed as two SOPS-encrypted manifests targeting
-> different namespaces. This is the cleanest GitOps-native approach — no
-> external secret operator, no cross-namespace RBAC, no reflector. See
-> [ADR-INFRA-006](adr/ADR-INFRA-006.md) for the decision rationale.
-
----
-
-## 2) Hetzner Cloud setup
+## 1) Hetzner Cloud setup
 
 > **What is Hetzner Cloud?** A European cloud provider offering affordable
 > VMs (called "servers") with good network performance. We use a single VM
@@ -433,7 +287,7 @@ hcloud ssh-key create --name register-dev-key --public-key-file ~/.ssh/id_ed2551
 
 ---
 
-## 3) Terraform — VM, k3s, Cilium, Istio, ArgoCD
+## 2) Hetzner env root — VM, k3s, Cilium, Istio, cert-manager, ArgoCD
 
 > **What does Terraform do here?** It provisions the entire bootstrap layer in
 > one `terraform apply`:
@@ -448,38 +302,112 @@ hcloud ssh-key create --name register-dev-key --public-key-file ~/.ssh/id_ed2551
 > unless the code has changed. This is the core benefit of Infrastructure as
 > Code (IaC).
 
-The Terraform files live at [infra/terraform/](../infra/terraform/). Key files:
+The Hetzner env root lives at
+[infra/terraform/envs/hetzner/](../infra/terraform/envs/hetzner/). Key files:
 
 | File | Purpose |
 |---|---|
-| [main.tf](../infra/terraform/main.tf) | All resources: providers, network, firewall, VM, kubeconfig retrieval, Helm releases |
-| [variables.tf](../infra/terraform/variables.tf) | Input variables with defaults (versions, locations, CIDRs) |
-| [outputs.tf](../infra/terraform/outputs.tf) | Output values (server IP etc.) |
-| [cloud-init.yaml](../infra/terraform/cloud-init.yaml) | First-boot script: installs k3s with hardening flags |
+| [main.tf](../infra/terraform/envs/hetzner/main.tf) | Hetzner resources: provider, network, firewall, VM, kubeconfig retrieval, and the `module "platform"` call |
+| [variables.tf](../infra/terraform/envs/hetzner/variables.tf) | Input variables with defaults (locations, CIDRs, k3s + chart versions) |
+| [outputs.tf](../infra/terraform/envs/hetzner/outputs.tf) | Output values (server IP etc.) |
+| [cloud-init.yaml](../infra/terraform/envs/hetzner/cloud-init.yaml) | First-boot script: installs k3s with hardening flags |
+| [modules/platform/main.tf](../infra/terraform/modules/platform/main.tf) | The shared Helm releases (Cilium → Istio → cert-manager → ArgoCD → Image Updater) |
 
-### 3.1 What the Terraform code does (walk-through)
+### 2.1 The platform stack — what each layer is, and why this order
 
-Rather than duplicating the Terraform files here (which creates drift risk),
-this section explains what each resource block does. Read the actual files for
-the definitive source.
+`terraform apply` builds the cluster from the bottom up. Each layer needs the one
+beneath it to already exist, which is why the order is fixed and why every Helm
+release in [modules/platform/main.tf](../infra/terraform/modules/platform/main.tf)
+is wired to the previous one with `depends_on` (the env root gates the whole
+module on cluster readiness). Read top to bottom, this is the shape of the build:
 
-**Providers** ([main.tf](../infra/terraform/main.tf)):
+1. **The VM and k3s — the machine and the Kubernetes API.** Terraform creates a
+   Hetzner VM, and cloud-init installs k3s (a small single-binary Kubernetes
+   distribution) on first boot. k3s is installed *without* its default networking
+   and ingress (the cloud-init flags in §2.2 turn them off) because the next
+   layers replace them. At the end of this step there is a running Kubernetes API
+   but pods cannot yet get network addresses.
+
+2. **Cilium — the network (CNI).** A cluster cannot run application pods until a
+   CNI (Container Network Interface) plugin gives pods IP addresses and routes
+   traffic between them. k3s ships with flannel, but flannel cannot enforce
+   NetworkPolicy (pod-to-pod firewall rules). Cilium replaces it, using eBPF (a
+   Linux kernel technology) for both networking and policy. It is installed first
+   because every later component runs as pods that need networking.
+
+3. **Istio ambient — the service mesh (mTLS + L7 policy).** The mesh encrypts
+   traffic between pods with mutual TLS and enforces identity-based authorization,
+   without adding a proxy container to every pod ("ambient" = sidecar-less). It
+   installs as four charts in a required order:
+   - `base` — the CRDs and cluster roles the mesh's controllers depend on;
+     nothing else can install until these types exist.
+   - `cni` — the Istio CNI plugin, which runs *alongside* Cilium. This is why
+     Cilium is installed with `cni.exclusive=false`: it must not claim sole
+     ownership of pod networking.
+   - `ztunnel` — the per-node L4 proxy that carries the mTLS tunnel between
+     enrolled pods.
+   - `istiod` — the control plane that configures ztunnel and issues each pod its
+     cryptographic identity.
+   Installing out of order produces "CRD not found" errors, so each release
+   `depends_on` the previous.
+
+4. **cert-manager — TLS certificate lifecycle.** Issues and renews the TLS
+   certificates the ingress gateway serves to browsers. It is installed together
+   with its own CRDs (`Certificate`, `ClusterIssuer`) so that later
+   GitOps-managed manifests can reference those types. It comes after the mesh
+   (it is a normal in-cluster workload that benefits from mTLS) and before ArgoCD
+   (its types must exist before ArgoCD syncs manifests that use them).
+
+5. **ArgoCD — the GitOps controller, and the handoff point.** ArgoCD is the last
+   thing Terraform installs. Once it is running, Terraform's job is done:
+   everything above the platform is declared in git, and ArgoCD applies it. This
+   is the bootstrap boundary described earlier — the line between the bootstrap
+   layer (this guide) and the GitOps layer.
+
+6. **ArgoCD Image Updater — the build→deploy loop.** A companion controller that
+   watches GHCR for new image digests and commits the updated pin back to git, so
+   ArgoCD then syncs it. It is installed with ArgoCD because it is part of the
+   same GitOps machinery.
+
+The result of `terraform apply` is **Platform Ready**: a networked, mesh-enabled
+cluster with a GitOps controller running, waiting for the root application. The
+shared guides ([SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md),
+[GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md)) take it from there.
+
+> Every term above (CNI, service mesh, ztunnel, mTLS, CRD, GitOps, …) has a
+> one-line definition in the [Glossary](GITOPS-OPERATIONS.md#glossary). The chart
+> sources and pinned versions are recorded in
+> [ADR-INFRA-012 §7](adr/ADR-INFRA-012.md) (approved-upstream registry) and set
+> in [variables.tf](../infra/terraform/envs/hetzner/variables.tf).
+
+### 2.2 Resource reference
+
+Per-resource notes on [main.tf](../infra/terraform/envs/hetzner/main.tf), focusing on the
+security-relevant flags and the two fragile spots in the apply. The code itself
+is the definitive source; this is the annotated map.
+
+**Providers** ([versions.tf](../infra/terraform/envs/hetzner/versions.tf)):
 - `hcloud` — creates Hetzner Cloud resources (VMs, networks, firewalls)
 - `helm` — installs Helm charts into the cluster Terraform just created
 - `cloudinit` — renders the cloud-init template with variables (k3s version)
+- `null` — backs `null_resource.kubeconfig` (the SSH kubeconfig retrieval below)
+- All four are pinned to exact versions with an approval record inline in
+  `versions.tf`, and the checksums are committed in this env root's
+  `.terraform.lock.hcl` ([ADR-INFRA-012 §3/§6](adr/ADR-INFRA-012.md)).
+  `terraform init` therefore resolves identical provider builds on every machine.
 
-**Network** ([main.tf](../infra/terraform/main.tf)):
+**Network** ([main.tf](../infra/terraform/envs/hetzner/main.tf)):
 - `hcloud_network` + `hcloud_network_subnet` — private network for pod traffic.
   All node-to-node communication stays off the public internet.
 
-**Firewall** ([main.tf](../infra/terraform/main.tf)):
+**Firewall** ([main.tf](../infra/terraform/envs/hetzner/main.tf)):
 - SSH (port 22): restricted to `var.operator_cidr` — your IP only
 - HTTPS (port 443): open to the internet (application ingress)
 - k8s API (port 6443): restricted to `var.operator_cidr`
 - **Security note**: update `operator_cidr` if your ISP changes your IP.
   Forgetting this locks you out of SSH and the k8s API.
 
-**VM + cloud-init** ([main.tf](../infra/terraform/main.tf) + [cloud-init.yaml](../infra/terraform/cloud-init.yaml)):
+**VM + cloud-init** ([main.tf](../infra/terraform/envs/hetzner/main.tf) + [cloud-init.yaml](../infra/terraform/envs/hetzner/cloud-init.yaml)):
 - `hcloud_server` creates a `cpx41` (8 vCPU / 16 GB RAM) VM running Debian 12
 - cloud-init writes `/etc/rancher/k3s/config.yaml` with hardening flags:
   - `secrets-encryption: true` — encrypts Kubernetes Secrets at rest in etcd
@@ -492,7 +420,7 @@ the definitive source.
     For hardened environments, consider pre-baking k3s into a custom VM image
     with checksum verification.
 
-**Kubeconfig retrieval** ([main.tf](../infra/terraform/main.tf)):
+**Kubeconfig retrieval** ([main.tf](../infra/terraform/envs/hetzner/main.tf)):
 - `null_resource.kubeconfig` waits 90 seconds, then SSHs into the VM to copy
   the kubeconfig file locally
 - **Security note — `StrictHostKeyChecking=no`**: this disables SSH host key
@@ -507,24 +435,29 @@ the definitive source.
   — it is idempotent. For a more robust approach, replace the sleep with a
   retry loop polling `ssh root@<ip> kubectl get nodes`.
 
-**Helm releases** ([main.tf](../infra/terraform/main.tf)):
+**Helm releases** ([modules/platform/main.tf](../infra/terraform/modules/platform/main.tf)):
 - Cilium → Istio (base → cni → ztunnel → istiod) → cert-manager → ArgoCD →
-  Image Updater, each `depends_on` the previous
-- All versions are parameterized in [variables.tf](../infra/terraform/variables.tf)
+  Image Updater, each `depends_on` the previous; the env root gates the whole
+  module on cluster readiness
+- Versions are passed through from the env root's [variables.tf](../infra/terraform/envs/hetzner/variables.tf) (defaults in [modules/platform/variables.tf](../infra/terraform/modules/platform/variables.tf))
 - Key flag: `cni.exclusive=false` on Cilium (allows Istio CNI coexistence)
 - Key flag: `server.insecure=true` on ArgoCD — disables ArgoCD's own TLS
-  listener. Ztunnel provides mTLS between ArgoCD pods once the namespace is
-  enrolled, making ArgoCD's built-in TLS redundant.
-  **Bootstrapping gap**: `helm install` creates the `argocd` namespace
-  without the mesh label. §4.1 closes this with an imperative `kubectl
-  label`. The permanent fix is declarative: `argocd` is declared in
-  `infra/helm/namespaces/values.yaml` with `meshEnroll: true`, so ArgoCD's
-  own self-heal maintains the label after first sync
+  listener; ztunnel provides mTLS between ArgoCD pods once the namespace is
+  enrolled ([GITOPS-ROLLOUT.md §1](GITOPS-ROLLOUT.md#1-enroll-argocd-in-the-mesh)),
+  making ArgoCD's built-in TLS redundant
 
-### 3.2 Apply
+### 2.3 Apply
+
+Prerequisites — walk down this list before the first `terraform apply`:
+
+- [ ] Workstation tools installed (§0): `terraform`, `hcloud`, `kubectl`, `age`, `sops`, `argocd`
+- [ ] Hetzner API token created and `hcloud context` set (§1)
+- [ ] SSH keypair uploaded to Hetzner and matching `~/.ssh/id_ed25519` present locally (§1)
+- [ ] The three application images pushed to GHCR ([IMAGE-DEPLOY.md](IMAGE-DEPLOY.md)), or accept that `register`/`frontend` show **Degraded** until they are
+- [ ] The local Phase 4 gate above is green
 
 ```bash
-cd infra/terraform
+cd infra/terraform/envs/hetzner
 
 # WHAT: pass credentials via environment variables — never in .tfvars or CLI flags.
 # WHY: environment variables are not stored in shell history (unlike CLI args)
@@ -534,7 +467,9 @@ export TF_VAR_hcloud_token="<your-hetzner-api-token>"
 export TF_VAR_ssh_key_name="register-dev-key"
 export TF_VAR_operator_cidr="$(curl -fsSL https://api4.my-ip.io/ip)/32"
 
-# WHAT: terraform init downloads providers and modules.
+# WHAT: terraform init downloads the providers, verifying each against the
+#   checksums in the committed .terraform.lock.hcl. A checksum mismatch aborts
+#   the init — this is the supply-chain guarantee (ADR-INFRA-012 §3).
 terraform init
 
 # WHAT: terraform plan shows what WILL change, without changing anything.
@@ -550,208 +485,33 @@ terraform apply tfplan
 #   do not commit it.
 export KUBECONFIG="$PWD/kubeconfig.yaml"
 kubectl get nodes -o wide
+
+# VERIFICATION: ArgoCD pods should be Running (installed by the Helm provider).
+kubectl -n argocd get pods
 ```
 
 ---
 
-## 4) Post-Terraform bootstrap (one-time)
+## → Continue with the shared guides
 
-> **What is this section?** After `terraform apply`, the cluster has Cilium,
-> Istio, cert-manager, and ArgoCD running. But ArgoCD is not yet watching any
-> repository. These one-time manual steps connect ArgoCD to your git repo and
-> hand off control.
->
-> After this section, you stop running manual commands. Everything is GitOps.
+The platform is up and ArgoCD's pods are Running. Now:
 
-### 4.1 Enroll ArgoCD in the mesh and rotate admin password
+1. **[SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md)** — create the SOPS/age/YubiKey
+   secrets and apply them to the cluster.
+2. **[GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md)** — enroll ArgoCD in the mesh, rotate
+   its password, connect git (Hetzner uses the **HTTPS + PAT** branch in §4),
+   apply the root App-of-Apps, and run the auth-chain tests.
 
-> **Close the bootstrapping gap — two parts.**
->
-> Terraform's `helm install` created the `argocd` namespace without the Istio
-> ambient label. ArgoCD is a high-value target (cluster-wide RBAC, SOPS age
-> key, GitHub PAT, code execution in repo-server). From a defense-in-depth
-> perspective, leaving it outside the mesh is an unacceptable gap.
->
-> **Part 1 (below):** label the namespace now. Ztunnel is a node-level
-> DaemonSet — it watches namespace labels and updates eBPF/iptables rules
-> dynamically. Already-running ArgoCD pods are enrolled without a restart.
->
-> **Part 2:** the `argocd` namespace is declared in
-> `infra/helm/namespaces/values.yaml` with `meshEnroll: true`. When ArgoCD
-> syncs the namespace chart (~60 s after the root App of Apps is applied in
-> §4.4), it applies the Namespace resource with the ambient label. From
-> that point, ArgoCD's self-heal prevents label drift — the enrollment is
-> under GitOps governance.
-
-```bash
-# SECURITY: enroll the argocd namespace in the Istio ambient mesh.
-# Part 1 of 2 — closes the bootstrap window immediately.
-# Part 2 is declarative: values.yaml declares argocd with meshEnroll: true.
-kubectl label namespace argocd istio.io/dataplane-mode=ambient
-
-# VERIFICATION: confirm the label is set.
-kubectl get namespace argocd --show-labels | grep dataplane-mode
-```
-
-> **Why rotate immediately?** ArgoCD generates a random admin password on
-> install and stores it as a Kubernetes Secret. Auto-generated bootstrap
-> credentials should never persist — this is a standard security practice.
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 8080:80 &
-PF_PID=$!
-sleep 3
-
-# WHAT: retrieve the auto-generated admin password.
-ARGOCD_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath='{.data.password}' | base64 -d)
-
-# WHAT: --insecure skips TLS verification to the ArgoCD server.
-# The port-forward runs plain HTTP locally — there is no TLS to verify.
-# This does NOT affect the security of any other connection.
-argocd login localhost:8080 \
-  --username admin \
-  --password "$ARGOCD_PASS" \
-  --insecure
-
-# WHAT: set a new password. read -s hides terminal input.
-read -r -s -p "New ArgoCD admin password: " NEW_PASS; echo
-argocd account update-password \
-  --account admin \
-  --current-password "$ARGOCD_PASS" \
-  --new-password "$NEW_PASS"
-
-# SECURITY: clear passwords from shell memory. Delete the bootstrap secret.
-unset ARGOCD_PASS NEW_PASS
-kubectl -n argocd delete secret argocd-initial-admin-secret
-
-kill $PF_PID 2>/dev/null || true
-```
-
-### 4.2 Install SOPS decryption key into the cluster
-
-> **What is this?** ArgoCD needs the software age private key to decrypt
-> `infra/secrets/*.enc.yaml` at sync time. The software key is stored
-> encrypted in the repo (`cluster-age-key.enc.yaml`), protected by your
-> YubiKey. Here you decrypt it with a YubiKey touch and inject it into
-> the cluster.
->
-> **Security note**: the plaintext software key is piped directly into
-> `kubectl` and never written to disk. The Secret is encrypted at rest
-> by k3s's `--secrets-encryption` flag (configured in cloud-init).
-> See [SOPS-YUBIKEY-MODEL.md — Use Case 3](SOPS-YUBIKEY-MODEL.md#use-case-3-bootstrap-the-cluster-after-cluster-creation)
-> for the full explanation of what happens here.
-
-```bash
-# WHAT: decrypt the cluster software key using your YubiKey (touch required),
-#   then pipe it directly into kubectl to create the Secret.
-# SECURITY: the plaintext key never touches disk — it flows through the pipe.
-sops --decrypt --input-type binary infra/secrets/cluster-age-key.enc.yaml \
-  | kubectl -n argocd create secret generic sops-age-key \
-      --from-file=keys.txt=/dev/stdin \
-      --dry-run=client -o yaml \
-  | kubectl apply -f -
-
-# VERIFICATION:
-kubectl -n argocd get secret sops-age-key
-```
-
-### 4.3 Connect the GitHub repository
-
-> **Why register the repo?** ArgoCD maintains an allow list of trusted
-> repositories. Only registered repos can be referenced in Application
-> manifests. This prevents someone from pointing an Application at a
-> malicious repo.
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 8080:80 &
-PF_PID=$!
-sleep 3
-
-read -r -p "GitHub repo URL (https://github.com/org/repo): " GH_REPO
-read -r -p "GitHub username: " GH_USER
-read -r -s -p "GitHub PAT (read:repo scope): " GH_PAT; echo
-
-argocd repo add "$GH_REPO" \
-  --username "$GH_USER" \
-  --password "$GH_PAT" \
-  --insecure   # skips TLS check to ArgoCD server on localhost, not to GitHub
-
-# SECURITY: wipe credentials from shell memory immediately.
-unset GH_USER GH_PAT
-kill $PF_PID 2>/dev/null || true
-```
-
-### 4.4 Apply the root App of Apps — the handoff moment
-
-> **This is the single most important step.** The root Application tells
-> ArgoCD to watch `infra/argocd/apps/` in your git repo. ArgoCD discovers all
-> child Application files in that directory and deploys them.
->
-> After this, adding a new service to the cluster = adding one YAML file to
-> `infra/argocd/apps/` and pushing to git.
->
-> **Note**: the previous version of this guide had a separate step to create
-> the `namespaces` app imperatively via `argocd app create`. That is
-> unnecessary — the root App of Apps already includes
-> [namespaces.yaml](../infra/argocd/apps/namespaces.yaml). The App of Apps
-> pattern means you declare everything in git, not via CLI commands.
-
-```bash
-# WHAT: apply the root Application manifest. This is the LAST kubectl apply.
-kubectl apply -f infra/argocd/apps/root.yaml
-```
-
-ArgoCD will now discover and deploy these Applications automatically:
-
-| ArgoCD Application | What it deploys | Source |
-|---|---|---|
-| `namespaces` | Namespaces with Pod Security labels, mesh enrollment, LimitRanges | [infra/helm/namespaces/](../infra/helm/namespaces/) |
-| `kyverno` | Kyverno admission controller (wave 1, `kyverno` project, `kyverno` namespace) | Upstream Helm chart v3.7.1 (remote) |
-| `postgresql` | PostgreSQL database (StatefulSet) | Bitnami Helm chart (remote) |
-| `keycloak` | Keycloak identity provider | [infra/helm/keycloak/](../infra/helm/keycloak/) (local chart, `quay.io/keycloak/keycloak:26.0`) |
-| `spicedb` | SpiceDB authorization service (wave 3, `infra` project, `infra` namespace) | [infra/helm/spicedb/](../infra/helm/spicedb/) (local chart, `ghcr.io/authzed/spicedb`) |
-| `opa` | OPA ext_authz server (2 replicas + PDB) | [infra/helm/opa/](../infra/helm/opa/) |
-| `mesh-policy` | Istio auth, PeerAuthentication, NetworkPolicies, RBAC | [infra/k8s/](../infra/k8s/) |
-| `register` | Application Deployment + Image Updater config | [infra/helm/register/](../infra/helm/register/) |
-| `frontend` | Frontend SPA (nginx 1.27.5-alpine-slim) | [infra/helm/frontend/](../infra/helm/frontend/) |
-| `irmin` | Irmin GraphQL persistence backend | [infra/helm/irmin/](../infra/helm/irmin/) |
-
-### 4.5 Watch the sync
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 8080:80 &
-PF_PID=$!
-sleep 3
-
-# WHAT: list all ArgoCD Applications and their sync/health status.
-argocd app list
-
-# WHAT: wait for each app to reach healthy state.
-argocd app wait namespaces --health --timeout 60
-argocd app wait postgresql --health --timeout 300
-argocd app wait keycloak --health --timeout 300
-argocd app wait mesh-policy --health --timeout 60
-
-kill $PF_PID 2>/dev/null || true
-```
+There is **no cluster-side age key to inject** — ArgoCD does not decrypt
+secrets; the operator applies them by hand with a YubiKey touch
+([SECRETS-BOOTSTRAP.md §6](SECRETS-BOOTSTRAP.md#6-apply-the-secrets-to-the-cluster)).
 
 ---
 
-## 5) What ArgoCD manages / The deploy loop
-
-Full reference for ArgoCD Applications, AppProject scoping, security policies,
-the automated deploy loop, and the day-to-day GitOps workflow:
-
-> **[GITOPS-OPERATIONS.md](GITOPS-OPERATIONS.md)** — shared operations
-> reference (identical between the local and Hetzner guides).
-
----
-
-## 6) Teardown
+## Teardown
 
 ```bash
-cd infra/terraform
+cd infra/terraform/envs/hetzner
 
 # WHAT: destroy all Hetzner Cloud resources (VM, network, firewall).
 # Terraform reads its state file and deletes every resource it created.
@@ -763,8 +523,10 @@ rm -f kubeconfig.yaml
 ```
 
 > **Reconstruction**: the cluster is fully recreated by running `terraform apply`
-> again. Because all state lives in git (Helm charts, ArgoCD apps, SOPS-encrypted
-> secrets), nothing is lost. The only external dependency is the age private key.
+> again, then re-running [SECRETS-BOOTSTRAP.md §6](SECRETS-BOOTSTRAP.md#6-apply-the-secrets-to-the-cluster)
+> and [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md). Because all state lives in git
+> (Helm charts, ArgoCD apps, SOPS-encrypted secrets), nothing is lost. The only
+> external dependency is a private key — the YubiKey or the offline backup.
 
 > **Note:** Terraform state is currently stored locally. Migrate to an
 > S3-compatible backend when multi-operator or CI access is needed.
@@ -772,37 +534,25 @@ rm -f kubeconfig.yaml
 
 ---
 
-## 7) Security boundaries and accepted risks
+## Security boundaries and accepted risks
 
 > **Reference frameworks**: these boundaries are informed by the
 > [CIS Kubernetes Benchmark](https://www.cisecurity.org/benchmark/kubernetes)
 > and [NSA/CISA Kubernetes Hardening Guide](https://media.defense.gov/2022/Aug/29/2003066362/-1/-1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF).
 
-### Post-deploy verification checklist
-
-After ArgoCD has synced all applications, verify these security properties.
-Items marked **(prod only)** apply only when the production realm is active
-(`realm.realmFile: realms/register-realm-prod.json` in Keycloak Helm values).
-
-| # | Check | Command | Expected |
-|---|---|---|---|
-| 1 | Waypoint running | `kubectl -n register get gtw waypoint` | `PROGRAMMED: True` |
-| 2 | OPA healthy | `kubectl -n register get pods -l app.kubernetes.io/name=opa` | `Running`, `Ready: True` |
-| 3 | PeerAuth STRICT | `kubectl -n register get pa -o jsonpath='{..mode}'` | `STRICT` |
-| 4 | JWT chain works | Acquire token via port-forward, decode, verify `aud`/`roles` | `aud: register-api` |
-| 5 | ROPC rejected **(prod only)** | `bats tests/bats/opa-authz.bats` — GROUP 8 passes (not skipped) | Tests 8.1, 8.2 PASS |
-| 6 | Conftest clean | `./tests/run-regression.sh --static-only` | 0 failures |
-| 7 | Header stripping | `bats tests/bats/header-security.bats` — GROUP 1 passes | Tests 1.1–1.5 PASS |
+The post-deploy security verification checklist is in
+[GITOPS-ROLLOUT.md §12](GITOPS-ROLLOUT.md#12-post-deploy-security-verification)
+(shared between environments). The Hetzner-specific boundaries:
 
 | Boundary | Protection | Accepted risk |
 |---|---|---|
 | **Secrets at rest** | k3s `--secrets-encryption` (AES-CBC) | Single-node: node compromise = key compromise. Mitigate with disk encryption. |
-| **Secrets in git** | SOPS + age dual-recipient (YubiKey + software key). See [SOPS-YUBIKEY-MODEL.md](SOPS-YUBIKEY-MODEL.md). | YubiKey is the root of trust. Loss of YubiKey = locked out of cluster key and all secrets. |
+| **Secrets in git** | SOPS + age, two recipients (YubiKey + offline backup). See [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md). | Loss of both the YubiKey and the offline backup = ciphertext unrecoverable. |
 | **Container images** | GHCR private registry, digest pinning via Image Updater. Two application images: `register-server` and `irmin` (both built from `risquanter/register`). | Image Updater PAT has `read:packages` scope only. |
 | **API server access** | Hetzner firewall restricts port 6443 to `operator_cidr` | Must update CIDR when ISP changes your IP. |
 | **SSH access** | Key-only auth, firewall-restricted to `operator_cidr` | No bastion host — direct SSH from operator IP. |
 | **Pod-to-pod traffic** | Istio mTLS (ambient) + NetworkPolicy (Cilium) + CiliumNetworkPolicy for health probes | Health probe ports use PeerAuthentication PERMISSIVE. Rollback: remove infra from mesh. |
-| **ArgoCD** | Enrolled in mesh (§4.1), admin password rotated, UI behind port-forward | No SSO in this baseline. Add Dex + OIDC for team use. |
+| **ArgoCD** | Enrolled in mesh, admin password rotated, UI behind port-forward | No SSO in this baseline. Add Dex + OIDC for team use. |
 | **Supply chain** | k3s installed via `curl \| bash` | Trusts k3s download server at provision time. Mitigate with custom VM images. |
 | **First SSH connection** | `StrictHostKeyChecking=no` for kubeconfig retrieval | One-time risk during fresh VM provisioning. Pin host key afterward. |
 
@@ -834,26 +584,31 @@ Items marked **(prod only)** apply only when the production realm is active
 ### Terraform fails at kubeconfig retrieval
 
 The `sleep 90` may be too short if Hetzner is under load or package mirrors
-are slow. Wait 2 minutes and re-run:
+are slow. Wait 2 minutes and re-run — Terraform is idempotent and skips
+completed resources:
 
 ```bash
 terraform apply
 ```
 
-Terraform is idempotent — it will skip completed resources and retry the
-kubeconfig step.
-
 ### SOPS decryption fails
 
-```bash
-# verify the age key is installed in the cluster
-kubectl -n argocd get secret sops-age-key
+Under the manual two-recipient model, decryption happens on **your workstation**
+with the YubiKey (there is no cluster-side age key). If `sops -d` fails:
 
-# verify the key content matches your local key
-kubectl -n argocd get secret sops-age-key -o jsonpath='{.data.keys\.txt}' \
-  | base64 -d | head -1
-# should match: head -1 ~/.config/sops/age/keys.txt
+```bash
+# Is the YubiKey present and its identity listed?
+age-plugin-yubikey --list
+
+# Does .sops.yaml list the recipient your key corresponds to?
+grep -A3 'age:' .sops.yaml
+
+# If the YubiKey is unavailable, decrypt with the offline backup key instead:
+export SOPS_AGE_KEY_FILE=/path/to/restored/backup-age-key.txt
+sops -d infra/secrets/postgres.enc.yaml | head
 ```
+
+See [SECRETS-BOOTSTRAP.md § Recovery](SECRETS-BOOTSTRAP.md#recovery).
 
 ### Locked out — operator IP changed
 
