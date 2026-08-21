@@ -16,6 +16,14 @@ spec:
     repoURL: git@github.com:risquanter/register-infra.git
     path: infra/helm/keycloak
     targetRevision: HEAD
+    helm:
+      valueFiles:
+        # Cluster axis (Keycloak has no image-repo choice — upstream quay.io image).
+        # values-local carries the dev realm; swap in values-hetzner.yaml (prod
+        # realm) for the Hetzner cluster (point 3). See IMAGE-DEPLOY.md for the
+        # separate image-repo axis that the home-built charts use.
+        - values.yaml
+        - values-local.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: infra

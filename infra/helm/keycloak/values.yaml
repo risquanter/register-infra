@@ -1,10 +1,11 @@
 image:
-  # Official upstream Keycloak image from Quay.io.
+  # Official upstream Keycloak image from Quay.io — pulled directly in every
+  # environment (not a home-built image), so image.repository is NOT env-specific
+  # and stays here rather than in the env overlays.
   # Replaces the removed Bitnami image (docker.io/bitnami/keycloak).
   repository: quay.io/keycloak/keycloak
   tag: "26.0"
-  # Never for local k3d (pre-imported). Change to IfNotPresent for production.
-  pullPolicy: Never
+  pullPolicy: IfNotPresent
 
 replicaCount: 1
 
@@ -66,6 +67,7 @@ hostname: "keycloak.infra.svc.cluster.local"
 
 realm:
   importEnabled: true
-  # realmFile: path relative to the chart root (Files.Get syntax).
-  # Switch to realms/register-realm-prod.json for production environments.
-  realmFile: "realms/register-realm-dev.json"
+  # realmFile (path relative to the chart root, Files.Get syntax) is
+  # environment-specific and set by the env overlay (ADR-INFRA-014):
+  #   values-local.yaml    realms/register-realm-dev.json
+  #   values-hetzner.yaml  realms/register-realm-prod.json

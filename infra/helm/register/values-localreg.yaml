@@ -1,0 +1,13 @@
+# Image-repo overlay: local registry (register chart).
+#
+# The image-repo axis is independent of the cluster: it selects where app pods
+# pull images from, not where the cluster runs. This overlay points at the
+# k3d-managed local registry (image-repo point 1). Layer after values.yaml:
+# `helm ... -f values.yaml -f values-localreg.yaml`, or via the Application's
+# helm.valueFiles. Swap in values-ghcr.yaml to pull from GHCR instead.
+#
+# image.repository is the only image field that differs by repo (tag and
+# pullPolicy: IfNotPresent are shared, so they stay in values.yaml). Locally the
+# image is built and `docker push`ed to this registry — see docs/IMAGE-DEPLOY.md.
+image:
+  repository: k3d-registry.localhost:5000/register-server

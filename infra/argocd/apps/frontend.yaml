@@ -18,7 +18,11 @@ spec:
     helm:
       releaseName: frontend
       valueFiles:
+        # Image-repo axis (independent of cluster). Default is the local registry
+        # (point 1); swap values-localreg.yaml → values-ghcr.yaml to pull from GHCR
+        # (points 2 & 3, which also need the ghcr-pull secret). See IMAGE-DEPLOY.md.
         - values.yaml
+        - values-localreg.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: register

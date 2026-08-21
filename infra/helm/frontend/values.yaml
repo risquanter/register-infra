@@ -1,15 +1,16 @@
-# Frontend image — built from risquanter/register repository via compose
-# (the service is profile-gated; build context is the PARENT dir — sibling
-# repos hdr-rng/vague-quantifier-logic are copied in, see register TODO §5b):
-#   docker compose --profile frontend build frontend   # → local/frontend:<APP_VERSION>
+# Frontend image, built from the risquanter/register repository via compose (the
+# service is profile-gated; build context is the PARENT dir — sibling repos
+# hdr-rng/vague-quantifier-logic are copied in, see register TODO §5b):
+#   docker compose --profile frontend build frontend
+# then pushed to the registry the cluster pulls from. Full loop: docs/IMAGE-DEPLOY.md.
 #
-# Local dev deploy: import + bump this tag (see docs/LOCAL-IMAGE-DEPLOY.md):
-#   k3d image import local/frontend:<version> -c register-dev
-# Production: push to GHCR and let Image Updater manage the tag.
+# image.repository lives in the image-repo overlay, not here (independent of the cluster)
+# (ADR-INFRA-014; IMAGE-DEPLOY.md § the image-repo axis):
+#   values-localreg.yaml    k3d-registry.localhost:5000/frontend  (docker push)
+#   values-ghcr.yaml  ghcr.io/risquanter/frontend           (CI push / Image Updater)
 image:
-  repository: local/frontend
   tag: "0.4.0"
-  pullPolicy: Never
+  pullPolicy: IfNotPresent
 
 # Single replica is sufficient. The frontend is stateless (all state is in
 # the backend). Scaling requires no coordination.
@@ -37,8 +38,8 @@ env:
   - name: BACKEND_URL
     value: "http://register.register.svc.cluster.local:8090"
 
-# imagePullSecrets: same pattern as register and irmin charts.
-# Disabled for local dev (image pre-imported via k3d image import).
+# imagePullSecrets: empty here (the local registry needs no auth). values-ghcr.yaml
+# overrides this with ghcr-pull for authenticated GHCR pulls. Same as the register chart.
 imagePullSecrets: []
 
 serviceAccount:

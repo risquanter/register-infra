@@ -1,0 +1,16 @@
+# Image-repo overlay: GHCR (frontend chart).
+#
+# The image-repo axis is independent of the cluster: it selects where app pods
+# pull images from, not where the cluster runs. This overlay points at GHCR
+# (image-repo points 2 and 3). Layer after values.yaml, or via the Application's
+# helm.valueFiles. Swap in values-localreg.yaml to pull from the local registry.
+#
+# ArgoCD Image Updater tracks the GHCR digest in steady state (docs/IMAGE-DEPLOY.md).
+# tag and pullPolicy: IfNotPresent are shared, in values.yaml.
+image:
+  repository: ghcr.io/risquanter/frontend
+
+# ghcr-pull: read-only GHCR pull secret, created during bootstrap for GHCR points
+# (SECRETS-BOOTSTRAP.md). Overrides the empty imagePullSecrets default in values.yaml.
+imagePullSecrets:
+  - name: ghcr-pull

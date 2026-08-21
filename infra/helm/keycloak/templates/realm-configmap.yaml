@@ -14,10 +14,12 @@
 # Keycloak admin console and redeploy.
 #
 # DEV vs PROD:
-# The active realm file is set by values.realm.realmFile:
-#   realms/register-realm-dev.json  — ROPC enabled, test users, known secret
-#   realms/register-realm-prod.json — ROPC disabled, no test users
-# Switch the value in values.yaml (or a values-production.yaml override).
+# The active realm file is set by values.realm.realmFile, which lives in the
+# environment overlay (ADR-INFRA-014), not the shared values.yaml:
+#   values-local.yaml    realms/register-realm-dev.json  — ROPC enabled, test users, known secret
+#   values-hetzner.yaml  realms/register-realm-prod.json — ROPC disabled, no test users
+# Rendered without an env overlay, realmFile is empty and this ConfigMap carries no
+# realm — deploys always layer an overlay, same as the image charts' image.repository.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,5 +29,5 @@ metadata:
     {{- include "keycloak.labels" . | nindent 4 }}
 data:
   register-realm.json: |
-    {{- .Files.Get .Values.realm.realmFile | nindent 4 }}
+    {{- .Files.Get (.Values.realm.realmFile | default "") | nindent 4 }}
 {{- end }}

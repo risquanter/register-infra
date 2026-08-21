@@ -1,0 +1,8 @@
+# Cluster overlay: local (keycloak chart).
+#
+# Keycloak has no image-repo choice — the container image is upstream
+# quay.io/keycloak/keycloak on every cluster, so image.repository is NOT
+# overridden here (unlike the home-built charts). The genuinely cluster-divergent
+# field is the realm import file: the local cluster uses the dev realm.
+realm:
+  realmFile: "realms/register-realm-dev.json"

@@ -1,0 +1,12 @@
+# Cluster overlay: Hetzner (keycloak chart).
+#
+# Keycloak has no image-repo choice — the container image is upstream
+# quay.io/keycloak/keycloak on every cluster, so image.repository is NOT
+# overridden here. The genuinely cluster-divergent field settled today is the
+# realm import file: the Hetzner cluster uses the prod realm.
+#
+# Deferred (tracked in docs/TODO.md § Multi-Environment Values Overlay): Keycloak
+# production hardening — start (not start-dev) and KC_HOSTNAME_STRICT=true — folds
+# into this file once that change is implemented.
+realm:
+  realmFile: "realms/register-realm-prod.json"
