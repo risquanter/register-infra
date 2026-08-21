@@ -1,6 +1,6 @@
 ---
 name: infra-dev
-description: "Dev workflow for the register-infra project. Use for: kubectl cluster inspection, helm lint/template/upgrade, ArgoCD sync and diff, SOPS encrypt/decrypt, bats/conftest test invocation, k3d cluster management, zed SpiceDB CLI, post-sleep recovery, image import, and common operational one-liners."
+description: "Dev workflow for the register-infra project. Use for: kubectl cluster inspection, helm lint/template/upgrade, ArgoCD sync and diff, SOPS encrypt/decrypt, bats/conftest test invocation, k3d cluster management, zed SpiceDB CLI, post-sleep recovery, image build/push to the k3d registry, and common operational one-liners."
 user-invokable: false
 ---
 
@@ -53,12 +53,14 @@ k3d cluster list
 k3d cluster start register-dev
 k3d cluster stop register-dev
 
-# Import a locally-built image (avoids registry push for dev)
-k3d image import <image>:<tag> -c register-dev
+# Push a locally-built image to the k3d registry the cluster pulls from.
+# Full build → push → rollout loop: docs/IMAGE-DEPLOY.md. Use a fresh version tag.
+REG=k3d-registry.localhost:5000
+docker tag local/<image>:<tag> $REG/<image>:<tag> && docker push $REG/<image>:<tag>
 # Examples:
-k3d image import local/register-server:dev -c register-dev
-k3d image import local/frontend:dev        -c register-dev
-k3d image import local/irmin-prod:3.11     -c register-dev
+docker tag local/register-server:$V $REG/register-server:$V && docker push $REG/register-server:$V
+docker tag local/frontend:$V        $REG/frontend:$V        && docker push $REG/frontend:$V
+docker tag local/irmin-prod:3.11    $REG/irmin-prod:3.11    && docker push $REG/irmin-prod:3.11
 ```
 
 ---
@@ -111,19 +113,19 @@ argocd app list
 ## SOPS
 
 ```bash
-# Encrypt a new secret file (software age key)
-PUBKEY=$(grep "^# public key:" ~/.config/sops/age/keys.txt | awk '{print $4}')
-sops --encrypt --age "$PUBKEY" <plaintext>.yaml > infra/secrets/<name>.enc.yaml
+# Encrypt a new secret file. Recipients (primary YubiKey + offline backup) come
+# from .sops.yaml creation_rules — no inline --age. Model: docs/SECRETS-BOOTSTRAP.md.
+sops --encrypt <plaintext>.yaml > infra/secrets/<name>.enc.yaml
 rm <plaintext>.yaml   # never commit plaintext
 
-# Decrypt for inspection (pipe to stdout, never write to disk)
+# Decrypt for inspection (pipe to stdout, never write to disk; YubiKey touch).
 sops --decrypt infra/secrets/<name>.enc.yaml
 
-# Edit in-place (decrypts, opens $EDITOR, re-encrypts on save)
+# Edit in-place (decrypts, opens $EDITOR, re-encrypts on save; YubiKey touch).
 sops infra/secrets/<name>.enc.yaml
 
-# Verify ArgoCD can decrypt (requires the age key Secret in argocd namespace)
-kubectl -n argocd get secret sops-age -o jsonpath='{.data.keys\.txt}' | base64 -d | head -3
+# ArgoCD does NOT decrypt SOPS — the operator applies decrypted Secrets by hand:
+#   sops --decrypt infra/secrets/<name>.enc.yaml | kubectl apply -f -
 ```
 
 ---
