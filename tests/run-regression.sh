@@ -41,6 +41,15 @@ done
 
 FAILURES=0
 
+# ── Phase 0: SOPS recipient consistency (static, no cluster) ─────────────────
+if [ "$BATS_ONLY" = false ]; then
+  echo "═══ Phase 0: SOPS recipient consistency ═══"
+  if ! "${SCRIPT_DIR}/check-sops-recipients.sh"; then
+    FAILURES=$((FAILURES + 1))
+  fi
+  echo ""
+fi
+
 # ── Phase 1: Conftest static analysis ────────────────────────────────────────
 if [ "$BATS_ONLY" = false ]; then
   echo "═══ Phase 1: Conftest static analysis ═══"
