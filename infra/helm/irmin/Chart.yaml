@@ -6,4 +6,6 @@ description: >-
   Built from risquanter/register (dev/Dockerfile.irmin).
 type: application
 version: 0.1.0
-appVersion: "3.11"
+# 3.11-p1 = upstream Irmin 3.11.0 plus register's local irmin-graphql merge-conflict
+# patch (see infra/helm/irmin/values.yaml and register's VERSION-UPGRADE-PROTOCOL.md).
+appVersion: "3.11-p1"

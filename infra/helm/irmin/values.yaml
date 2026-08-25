@@ -1,14 +1,23 @@
 # Irmin image — prod build from the risquanter/register repository:
 #   docker build -f containers/prod/Dockerfile.irmin-prod \
-#     -t k3d-registry.localhost:5000/irmin-prod:3.11 .
+#     -t k3d-registry.localhost:5000/irmin-prod:3.11-p1 .
 # then pushed to the registry the cluster pulls from. Full loop: docs/IMAGE-DEPLOY.md.
 #
 # image.repository lives in the image-repo overlay, not here (independent of the cluster)
 # (ADR-INFRA-014; IMAGE-DEPLOY.md § the image-repo axis):
 #   values-localreg.yaml    k3d-registry.localhost:5000/irmin-prod  (docker push)
 #   values-ghcr.yaml  ghcr.io/risquanter/irmin-prod           (CI push / Image Updater)
+#
+# Tag 3.11-p1 = upstream Irmin 3.11.0 plus the register repo's local irmin-graphql
+# source patch. It is NOT interchangeable with upstream 3.11.0: upstream's
+# merge_with_branch resolver discards the merge result and silently swallows merge
+# conflicts; the patch propagates the conflict as a GraphQL error prefixed
+# "merge conflict: ". The image built and pushed is 3.11-p1, so this tag must match
+# it exactly — a bare "3.11" pulls a non-existent image (ImagePullBackOff). Source of
+# truth for the tag and the patch: register's containers/builders/Dockerfile.irmin-builder
+# and docs/dev/VERSION-UPGRADE-PROTOCOL.md (ADR-020 §11).
 image:
-  tag: "3.11"
+  tag: "3.11-p1"
   pullPolicy: IfNotPresent
 
 # Single replica is acceptable: Irmin is not fail-closed (unlike OPA).

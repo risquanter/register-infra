@@ -72,40 +72,46 @@ tag also makes it impossible to tell which build is running.
 
 ## Local loop (`local-registry`)
 
+Run everything from the **register-infra root**. The `image:build` and `image:push`
+mise tasks operate on the `../register` sibling checkout (compose builds live there);
+the version bump and the chart-bump git commit in the middle stay manual — no task
+commits on your behalf. The task bodies are in [`mise.toml`](../mise.toml) `[tasks]`.
+
 ```bash
 # 0. register/ — bump the version if this deploy warrants it (user-owned):
 #    build.sbt ThisBuild / version + .env APP_VERSION, kept in sync.
-V=$(grep -oP 'APP_VERSION=\K.*' ~/projects/register/.env)
-REG=k3d-registry.localhost:5000
 
-# 1. Build from source (the working tree!) — register/
-cd ~/projects/register
-docker compose build register-server                 # → local/register-server:$V  (~5–10 min, GraalVM native)
-docker compose --profile frontend build frontend     # → local/frontend:$V          (profile flag required)
-docker compose build irmin                            # → local/irmin-prod:$V (only if irmin changed)
+# 1. Build from source (the working tree in ../register!). Omit the arg to build
+#    all three; name one to rebuild just it.
+mise run image:build                      # all three
+#   mise run image:build register-server  # ~5–10 min, GraalVM native
+#   mise run image:build frontend         # the --profile frontend flag is baked in
+#   mise run image:build irmin            # only if irmin changed (tag 3.11-p1)
 
-# 2. Tag for the local registry and push. After the push the image is in the
-#    registry — the cluster pulls it exactly as it would pull from GHCR.
-docker tag local/register-server:$V $REG/register-server:$V && docker push $REG/register-server:$V
-docker tag local/frontend:$V        $REG/frontend:$V        && docker push $REG/frontend:$V
-# irmin uses a fixed 3.11 tag unless you changed it:
-docker tag local/irmin-prod:3.11    $REG/irmin-prod:3.11    && docker push $REG/irmin-prod:3.11
+# 2. Tag + push to the registry the cluster pulls from. Pushes every image that was
+#    built locally (skips any that weren't) — after the push the image is in the
+#    registry, and the cluster pulls it exactly as it would pull from GHCR.
+mise run image:push                       # → k3d-registry.localhost:5000 (default)
+#   mise run image:push ghcr              # → ghcr.io/risquanter (needs a write:packages PAT)
+# irmin keeps its fixed tag 3.11-p1 (upstream Irmin 3.11.0 + register's local
+# irmin-graphql merge-conflict patch — NOT upstream 3.11.0; see the register repo's
+# containers/builders/Dockerfile.irmin-builder and VERSION-UPGRADE-PROTOCOL.md), so
+# its tag never tracks APP_VERSION.
 
 # 3. register-infra/ — bump image.tag (the deploy lever) and appVersion, then push.
-#    infra/helm/register/values.yaml  → image.tag: "$V"   ; Chart.yaml → appVersion: "$V"
-#    infra/helm/frontend/values.yaml  → image.tag: "$V"   ; Chart.yaml → appVersion: "$V"
-cd ~/projects/register-infra
+#    This git commit is the deploy lever and stays manual — no task commits for you.
+#    infra/helm/register/values.yaml  → image.tag: "<V>"  ; Chart.yaml → appVersion: "<V>"
+#    infra/helm/frontend/values.yaml  → image.tag: "<V>"  ; Chart.yaml → appVersion: "<V>"
 git add infra/helm/register infra/helm/frontend
-git commit -m "deploy register + frontend $V"
+git commit -m "deploy register + frontend <V>"
 git push
 
 # 4. Don't wait ~3 min for ArgoCD's git poll — force a refresh.
-kubectl -n argocd annotate application register argocd.argoproj.io/refresh=normal --overwrite
-kubectl -n argocd annotate application frontend argocd.argoproj.io/refresh=normal --overwrite
+mise run deploy:refresh                   # both register + frontend
+#   mise run deploy:refresh frontend      # just one
 
 # 5. Watch the rollout.
-kubectl -n register rollout status deployment/register --timeout=180s
-kubectl -n register rollout status deployment/frontend --timeout=180s
+mise run deploy:rollout                   # both register + frontend
 kubectl -n register get pods -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}'
 ```
 
@@ -124,7 +130,8 @@ are pushed and which `image.repository` the chart renders. This is point 2 on a
 local cluster and point 3 on Hetzner; both are supported, tested paths.
 
 - **Push** to `ghcr.io/risquanter/<image>` instead of the local registry
-  (`docker push`, or let CI build and push on a git push to `risquanter/register`).
+  (`mise run image:push ghcr`, or let CI build and push on a git push to
+  `risquanter/register`).
   GHCR packages are private by default — a `docker push` (or pull) fails with 403
   until you authenticate with a PAT (`write:packages`/`read:packages`) or make the
   package public. This auth step is the main thing point 2 exists to teach on a

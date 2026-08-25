@@ -270,7 +270,7 @@ Application and AppProject resources in the `argocd` namespace.
 | [keycloak.yaml](../infra/argocd/apps/keycloak.yaml) | Keycloak IdP | infra | Local chart (`quay.io/keycloak/keycloak:26.0`), `start-dev` mode, health on management port 9000, connects to PostgreSQL via internal DNS |
 | [register.yaml](../infra/argocd/apps/register.yaml) | Application Deployment | app | Image Updater annotations for automated GHCR → git → cluster deploy loop |
 | [frontend.yaml](../infra/argocd/apps/frontend.yaml) | Frontend SPA | app | nginx 1.27.5-alpine-slim, serves built SPA, `BACKEND_URL` → register:8090 |
-| [irmin.yaml](../infra/argocd/apps/irmin.yaml) | Irmin persistence | app | `local/irmin-prod:3.11`, GraphQL + PVC for workspace data |
+| [irmin.yaml](../infra/argocd/apps/irmin.yaml) | Irmin persistence | app | `local/irmin-prod:3.11-p1` (upstream 3.11.0 + register's local irmin-graphql merge-conflict patch), GraphQL + PVC for workspace data |
 | [spicedb.yaml](../infra/argocd/apps/spicedb.yaml) | SpiceDB authorization service | infra | Local chart at `infra/helm/spicedb/`, sync wave 3, `infra` namespace, 2 replicas + PDB, pre-install/pre-upgrade db-init and migration Jobs |
 | [opa.yaml](../infra/argocd/apps/opa.yaml) | OPA Helm chart | platform | 2 replicas + PDB, policy from single canonical Rego source via `Files.Get` |
 | [mesh-policy.yaml](../infra/argocd/apps/mesh-policy.yaml) | Security policies | platform | Istio JWT/auth, PeerAuthentication, OPA ext_authz EnvoyFilter, Kyverno ClusterPolicy, NetworkPolicies, RBAC role definitions |
