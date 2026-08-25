@@ -69,7 +69,7 @@ you bump a version.
 | **kubectl** (client) | `v1.31.0` (stay within ±1 minor of k3s) | §0.3 |
 | **Cilium** chart | `1.17.0` | §2 |
 | **Gateway API CRDs** | `v1.2.0` (standard channel) | §3.1 |
-| **Istio** (base, cni, ztunnel, istiod) | `1.25.0` | §0.7 / §3.2 |
+| **Istio** (base, cni, ztunnel, istiod) | `1.25.0` | §3.2 (istioctl pinned in `mise.toml`, §0.3) |
 | **cert-manager** chart | `1.17.0` | §4 |
 | **ArgoCD** chart (argo/argo-cd) | `7.8.0` | §5 |
 | **ArgoCD Image Updater** chart | `0.11.0` | §5.1 |
@@ -189,165 +189,56 @@ newgrp docker
 docker info >/dev/null && echo "Docker is working"
 ```
 
-### 0.3 kubectl
+### 0.3 Workstation CLI tools — installed and pinned by mise
 
-> **What is kubectl?** The Kubernetes command-line tool. Every interaction with
-> a Kubernetes cluster — listing pods, applying YAML files, reading logs —
-> goes through kubectl. Think of it as "the Kubernetes terminal client".
-
-```bash
-# WHAT: install kubectl, pinned to a specific Kubernetes version.
-# WHY: kubectl should match your cluster's Kubernetes version within ±1 minor
-#   version. k3d currently ships k3s based on Kubernetes ~1.31.
-# SECURITY: we verify the download checksum to ensure the binary is authentic
-#   and not tampered with in transit.
-K8S_VERSION="v1.31.0"
-
-curl -fsSLO "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/amd64/kubectl"
-curl -fsSLO "https://dl.k8s.io/${K8S_VERSION}/bin/linux/amd64/kubectl.sha256"
-
-# verify integrity: compares the computed SHA-256 hash against the expected one
-echo "$(cat kubectl.sha256) kubectl" | sha256sum --check
-
-sudo install -m755 kubectl /usr/local/bin/kubectl
-rm -f kubectl kubectl.sha256
-kubectl version --client
-```
-
-### 0.4 Helm
-
-> **What is Helm?** Helm is a package manager for Kubernetes (analogous to
-> apt for Debian). A "Helm chart" is a bundle of Kubernetes YAML templates +
-> a `values.yaml` configuration file. Instead of writing dozens of YAML files
-> by hand, you install a chart and configure it with values. For example,
-> `helm install postgresql bitnami/postgresql` deploys a full PostgreSQL
-> database with one command. Keycloak is deployed from a local Helm chart
-> (at `infra/helm/keycloak/`) using the official upstream image
-> `quay.io/keycloak/keycloak:26.0`.
+> **What is mise?** mise (say "meez") is a single-binary tool-version manager and
+> task runner. It reads the committed `mise.toml` at the repository root, which
+> pins every workstation CLI this project uses to an exact version fetched from
+> that tool's own vendor. A single `mise install` gives you the whole toolchain at
+> the same versions CI uses — in place of the per-tool `curl | bash` installers.
+> The mechanism and the supply-chain policy behind it are
+> [ADR-INFRA-017](adr/ADR-INFRA-017.md) and [ADR-INFRA-012 §3](adr/ADR-INFRA-012.md).
 
 ```bash
-# WHAT: install Helm via the official install script.
-# NOTE: this is a curl|bash install. For CI/production use, download the
-#   binary directly from https://github.com/helm/helm/releases with checksum.
-curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-helm version
+# WHAT: install mise once, from its vendor's official installer. This is the only
+#   unpinned bootstrap step — mise then pins and checksum-verifies everything else.
+curl -fsSL https://mise.run | sh
+
+# WHAT: activate mise so its tool shims are on PATH in new shells.
+echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+exec "$SHELL"   # reload the shell (or just open a new terminal)
+
+# WHAT: from the repo root, approve the committed config and install the toolchain.
+#   `mise trust` records that you approve running this repo's mise.toml; `mise
+#   install` fetches each pinned CLI and verifies it against mise.lock.
+cd ~/projects/register-infra
+mise trust
+mise install
 ```
 
-### 0.5 k3d
+The CLIs mise installs, and what each is for — the platform bring-up below refers
+to them by name:
 
-> **What is k3d?** k3d runs k3s (a lightweight Kubernetes distribution)
-> inside Docker containers on your machine. You get a real Kubernetes cluster
-> that can be created and destroyed in seconds. The Kubernetes API is
-> identical to a full cluster — your Helm charts, policies, and ArgoCD
-> config work exactly the same on k3d as on a Hetzner Cloud VM.
+| Tool | Role in this guide |
+|---|---|
+| **kubectl** | the Kubernetes client; every cluster interaction goes through it |
+| **helm** | Kubernetes package manager; installs charts (cert-manager, ArgoCD, …) |
+| **k3d** | runs k3s (lightweight Kubernetes) inside Docker on your machine (§1) |
+| **cilium** | the Cilium CLI; installs and inspects the CNI — pod networking + NetworkPolicy (§2) |
+| **istioctl** | installs and manages Istio ambient mode — mTLS + L7 policy (§3) |
+| **sops** + **age** | encrypt/decrypt the SOPS secret files; age is the encryption backend ([SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md)) |
+| **argocd** | the ArgoCD CLI, used at bootstrap to log in, rotate the password, connect git (§5) |
+| **terraform** | used only by the automated track ([TERRAFORM-BOOTSTRAP.md](TERRAFORM-BOOTSTRAP.md)) |
 
-```bash
-# WHAT: install k3d via the official install script.
-curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-k3d version
-```
-
-### 0.6 Cilium CLI
-
-> **What is Cilium?** Cilium is a CNI (Container Network Interface) plugin.
-> In plain English: it is the software that lets pods talk to each other.
-> A fresh Kubernetes cluster has no networking until a CNI is installed —
-> the node will show "NotReady" until then.
->
-> We chose Cilium specifically because it also enforces NetworkPolicies
-> (firewall rules between pods) using eBPF — a high-performance Linux kernel
-> technology. The default CNI shipped with k3s (flannel) cannot enforce
-> NetworkPolicies at all, which means our default-deny security posture
-> would not work.
-
-```bash
-# WHAT: install the Cilium CLI, which is used to install Cilium into a cluster.
-# SECURITY: we verify the download checksum.
-CILIUM_CLI_VERSION=$(curl -fsSL https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
-curl -fsSLO "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-amd64.tar.gz"
-curl -fsSLO "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-amd64.tar.gz.sha256sum"
-sha256sum --check cilium-linux-amd64.tar.gz.sha256sum
-sudo tar xzvfC cilium-linux-amd64.tar.gz /usr/local/bin
-rm -f cilium-linux-amd64.tar.gz cilium-linux-amd64.tar.gz.sha256sum
-cilium version --client
-```
-
-### 0.7 istioctl
-
-> **What is Istio?** Istio is a service mesh — a dedicated infrastructure
-> layer that handles network traffic between your services. It provides:
-> - **mTLS** (mutual TLS): automatic encryption of all traffic between pods,
->   with no code changes needed in your application
-> - **L7 policy enforcement**: rules like "reject this request if the JWT is
->   invalid" or "only allow GET requests to this endpoint"
->
-> Istio **ambient mode** (which we use) runs as a per-node process (ztunnel)
-> instead of injecting a sidecar container into every pod. This is simpler
-> and lighter than traditional Istio.
->
-> `istioctl` is the CLI tool for installing and managing Istio.
-
-```bash
-# WHAT: download the Istio release bundle, extract the istioctl binary, clean up.
-# The istioctl version determines the Istio control-plane version it installs in
-# §3, so pin it to the Istio row of the Pinned versions table.
-ISTIO_VERSION=1.25.0   # = Pinned versions table (Istio)
-curl -L https://istio.io/downloadIstio | ISTIO_VERSION="$ISTIO_VERSION" sh -
-ISTIO_DIR=$(ls -d istio-*/ | head -n1)
-sudo install -m755 "${ISTIO_DIR}bin/istioctl" /usr/local/bin/istioctl
-rm -rf "$ISTIO_DIR"
-istioctl version --remote=false
-```
-
-### 0.8 SOPS + age
-
-> **What are SOPS and age?** SOPS (Secrets OPerationS) encrypts YAML values
-> while leaving keys visible — you can see which fields a secret contains
-> (for code review and auditability) without seeing the values. age is the
-> modern encryption backend SOPS uses (replacing GPG).
->
-> Both the local and production guides use the same SOPS + age workflow. The
-> YubiKey plugin (`age-plugin-yubikey`) and the full secrets model are covered
-> in the shared [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md) — this step just
-> installs the two base binaries.
-
-```bash
-# ── age ── modern encryption tool
-sudo apt install -y age
-age --version
-
-# ── SOPS ── encrypts/decrypts secret files using age keys
-# SECURITY: verify checksum after download.
-SOPS_VERSION=$(curl -fsSL https://api.github.com/repos/getsops/sops/releases/latest | jq -r .tag_name)
-curl -fsSLO "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64"
-curl -fsSLO "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.checksums.txt"
-grep "sops-${SOPS_VERSION}.linux.amd64$" "sops-${SOPS_VERSION}.checksums.txt" | sha256sum --check
-sudo install -m755 "sops-${SOPS_VERSION}.linux.amd64" /usr/local/bin/sops
-rm -f "sops-${SOPS_VERSION}.linux.amd64" "sops-${SOPS_VERSION}.checksums.txt"
-sops --version
-```
-
-### 0.9 ArgoCD CLI
-
-> **What is ArgoCD?** ArgoCD is a GitOps controller for Kubernetes. It
-> watches a git repository and ensures the cluster state matches what is
-> declared in the repo. If someone manually changes something in the cluster,
-> ArgoCD reverts it (self-healing). If a new file is added to git, ArgoCD
-> applies it (reconciliation).
->
-> The ArgoCD CLI is used only during bootstrap to log in, rotate the admin
-> password, and connect the git repo. After that, you interact with ArgoCD
-> by pushing to git — or via the web UI at `http://localhost:9090`.
-
-```bash
-# WHAT: install the ArgoCD CLI.
-ARGOCD_VERSION=$(curl -fsSL https://api.github.com/repos/argoproj/argo-cd/releases/latest \
-  | jq -r .tag_name)
-curl -fsSLO "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64"
-sudo install -m755 argocd-linux-amd64 /usr/local/bin/argocd
-rm -f argocd-linux-amd64
-argocd version --client
-```
+> **Why this is the secure path.** Each version is pinned in `mise.toml` with an
+> approval record (vendor identity, resolver backend, cooldown), and `mise.lock`
+> records the checksum mise verified on download. That is the pinned,
+> checksum-verified install the `curl | bash` convenience pattern could not give
+> you — now guaranteed by the committed manifest, identically on your machine and
+> in CI. The `age-plugin-yubikey` plugin for the YubiKey secrets flow is also
+> pinned in `mise.toml`; its use is covered in
+> [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md). Docker (§0.2) is the one dependency
+> mise does not manage.
 
 ---
 
@@ -519,7 +410,8 @@ kubectl get crd httproutes.gateway.networking.k8s.io
 > mode avoids this — the ztunnel process on the node handles mTLS transparently.
 
 ```bash
-# Installs the Istio version of the istioctl binary — pinned to the table in §0.7.
+# Installs the Istio control-plane version of the istioctl binary — istioctl is
+# pinned to 1.25.0 in mise.toml (§0.3), matching the Istio row of the table above.
 istioctl install -y --set profile=ambient
 
 # VERIFICATION: all Istio pods should be Running.

@@ -202,67 +202,36 @@ their own, and the gate is about *when* to run them, not *how*.
 > YubiKey plugin (`age-plugin-yubikey`) is installed in
 > [SECRETS-BOOTSTRAP.md](SECRETS-BOOTSTRAP.md).
 
-> **Security note — install method**: the workstation tools below are installed
-> as pinned binaries verified by checksum (and, for Terraform, by GPG signature),
-> or from distro/vendor package repos — no `curl <url> | bash`. The one
-> `curl | bash` in this guide is k3s inside the VM's cloud-init (§2), which trusts
-> the k3s download server at provision time; that risk is noted where it occurs.
+> **Install method — mise.** The workstation CLIs are installed and pinned by
+> mise, exactly as in the by-hand track
+> ([MANUAL-BOOTSTRAP.md §0.3](MANUAL-BOOTSTRAP.md)): one `mise install` reads the
+> committed `mise.toml` and fetches each tool — including **terraform 1.15.8** — at
+> its pinned version, checksum-verified against `mise.lock`. This replaces the
+> per-tool `curl | bash` / signature-check recipes and guarantees the developer
+> and CI resolve the same binaries. Rationale:
+> [ADR-INFRA-017](adr/ADR-INFRA-017.md), [ADR-INFRA-012 §3](adr/ADR-INFRA-012.md).
 
 ```bash
-# ── Terraform ── infrastructure provisioner
-# WHAT: pinned binary, checksum-verified, plus a GPG signature check on the
-#   checksum manifest (HashiCorp signs it, so this proves authenticity — not
-#   just that the zip matches a manifest fetched from the same server).
-# WHY: main.tf sets required_version >= 1.10; pin a specific stable release.
-# SECURITY: matches the sops/argocd pattern below (no `curl | bash`).
-TERRAFORM_VERSION=1.15.8
-TF_BASE="https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}"
-curl -fsSLO "${TF_BASE}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
-curl -fsSLO "${TF_BASE}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
-curl -fsSLO "${TF_BASE}/terraform_${TERRAFORM_VERSION}_SHA256SUMS.sig"
-# authenticity: import HashiCorp's PGP key and verify it signed the manifest
-curl -fsSL https://www.hashicorp.com/.well-known/pgp-key.txt | gpg --import
-gpg --verify "terraform_${TERRAFORM_VERSION}_SHA256SUMS.sig" \
-             "terraform_${TERRAFORM_VERSION}_SHA256SUMS"   # expect: Good signature
-# integrity: the zip matches the (now-trusted) manifest
-grep "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
-     "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum --check
-unzip -o "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" terraform -d .
-sudo install -m755 terraform /usr/local/bin/terraform
-rm -f terraform "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
-      "terraform_${TERRAFORM_VERSION}_SHA256SUMS" \
-      "terraform_${TERRAFORM_VERSION}_SHA256SUMS.sig"
-terraform version   # expect: Terraform v1.15.8
+# WHAT: install mise once from its vendor's official installer, activate it, then
+#   install the pinned toolchain from the repo's mise.toml.
+curl -fsSL https://mise.run | sh
+echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+exec "$SHELL"   # reload the shell (or open a new terminal)
 
-# ── Hetzner Cloud CLI ── API token management and SSH key upload
-# macOS:
-brew install hcloud
-# Linux: download from https://github.com/hetznercloud/cli/releases
-#   HCLOUD_VERSION=$(curl -fsSL https://api.github.com/repos/hetznercloud/cli/releases/latest | jq -r .tag_name)
-#   curl -fsSLO "https://github.com/hetznercloud/cli/releases/download/${HCLOUD_VERSION}/hcloud-linux-amd64.tar.gz"
-#   tar xzf hcloud-linux-amd64.tar.gz && sudo install -m755 hcloud /usr/local/bin/hcloud
-
-# ── age ── modern encryption tool; replaces GPG for SOPS
-sudo apt install -y age     # Debian/Ubuntu
-
-# ── SOPS ── encrypts/decrypts secret files using age keys
-# SECURITY: verify checksum after download.
-SOPS_VERSION=$(curl -fsSL https://api.github.com/repos/getsops/sops/releases/latest | jq -r .tag_name)
-curl -fsSLO "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64"
-curl -fsSLO "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.checksums.txt"
-grep "sops-${SOPS_VERSION}.linux.amd64$" "sops-${SOPS_VERSION}.checksums.txt" | sha256sum --check
-sudo install -m755 "sops-${SOPS_VERSION}.linux.amd64" /usr/local/bin/sops
-rm -f "sops-${SOPS_VERSION}.linux.amd64" "sops-${SOPS_VERSION}.checksums.txt"
-
-# ── ArgoCD CLI ── bootstrap-time only; day-to-day interaction is via git
-# SECURITY: checksum verification included.
-ARGOCD_VERSION=$(curl -fsSL https://api.github.com/repos/argoproj/argo-cd/releases/latest | jq -r .tag_name)
-curl -fsSLO "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64"
-curl -fsSLO "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/cli_checksums.txt"
-grep argocd-linux-amd64 cli_checksums.txt | sha256sum --check
-sudo install -m755 argocd-linux-amd64 /usr/local/bin/argocd
-rm -f argocd-linux-amd64 cli_checksums.txt
+cd ~/projects/register-infra
+mise trust
+mise install     # terraform, kubectl, helm, k3d, cilium, istioctl, sops, age, argocd
 ```
+
+The Terraform invocations later in this guide are also wrapped as mise tasks —
+`mise run tf:init hetzner`, `mise run tf:plan hetzner`, `mise run tf:apply hetzner`
+— which is exactly what the CI workflows run. The raw `terraform` commands shown
+below are what those tasks execute.
+
+> **Hetzner Cloud CLI (`hcloud`)** is optional and not managed by mise: it is used
+> only to create the API token and upload the SSH key by hand in §1. Install it
+> from the vendor release page (https://github.com/hetznercloud/cli/releases) or
+> `brew install hcloud`. Everything Terraform itself needs is in `mise.toml`.
 
 ---
 

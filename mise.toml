@@ -1,0 +1,245 @@
+# mise.toml — the one manifest that pins every host/CI CLI tool this repo uses
+# and defines the tasks run against them. Mechanism and rationale: ADR-INFRA-017.
+# Supply-chain governance (vendor identity, exact pinning, cooldown, approval
+# record) is ADR-INFRA-012 — this file is a consuming manifest under it.
+#
+# Each tool below carries an approval record: vendor + identity URL, the mise
+# backend that resolves to the vendor's own release artifact (ADR-INFRA-012 §2),
+# the exact pinned version (§3), and the cooldown-elapsed line (§4, clock from
+# public release date). §5/§6 are formally mandated only at T1/T2; these tools
+# are T3 (terraform, runs in CI) and T4 (dev-machine only), so the record is the
+# project convention that keeps every pin auditable in-file.
+#
+# mise itself — Vendor: jdx (Jeff Dickey) — https://github.com/jdx/mise
+#   The dev machine installs mise once from the vendor's official installer (T4).
+#   CI installs it via jdx/mise-action, SHA-pinned, with an exact version input
+#   (T3) — see .github/workflows/*.yaml. min_version is the compatibility floor;
+#   the exact CI pin lives in the action invocation.
+#   Cooldown elapsed: 2026-08-17 → adopted 2026-08-24 (7 days ≥ 7, T4). Reviewed: 2026-08-24
+
+min_version = "2026.8.8"
+
+[settings]
+# Write mise.lock recording each tool's resolved version and checksum, so an
+# install is reproducible and verifiable (ADR-INFRA-012 §3, host/CI CLI binary row).
+lockfile = true
+
+[tools]
+# terraform — T3 (runs in CI at build time). Vendor: HashiCorp — https://github.com/hashicorp/terraform
+# Backend aqua:hashicorp/terraform → HashiCorp's official checksummed releases.
+# Cooldown elapsed: 2026-07-08 → adopted 2026-08-24 (47 days ≥ 14, T3 new-adoption). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:hashicorp/terraform" = "1.15.8"
+
+# kubectl — T4 (dev machine). Vendor: Kubernetes / CNCF — https://github.com/kubernetes/kubernetes
+# Backend aqua:kubernetes/kubernetes/kubectl → official dl.k8s.io binaries with checksums.
+# Pinned to v1.31.0 to stay within ±1 minor of the k3s the cluster runs (v1.30).
+# Cooldown elapsed: 2024-08-13 → adopted 2026-08-24 (741 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:kubernetes/kubernetes/kubectl" = "1.31.0"
+
+# helm — T4 (dev machine). Vendor: Helm / CNCF — https://github.com/helm/helm
+# Backend aqua:helm/helm → Helm's official checksummed releases. Held on the 3.x
+# line: every chart in this repo targets Helm 3; Helm 4 is a separate migration.
+# Cooldown elapsed: 2026-08-14 → adopted 2026-08-24 (10 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:helm/helm" = "3.21.4"
+
+# k3d — T4 (dev machine). Vendor: k3d-io (Rancher / SUSE) — https://github.com/k3d-io/k3d
+# Backend aqua:k3d-io/k3d → official checksummed releases.
+# Cooldown elapsed: 2026-06-02 → adopted 2026-08-24 (83 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:k3d-io/k3d" = "5.9.0"
+
+# cilium-cli — T4 (dev machine); provides the `cilium` binary. Vendor: Cilium / CNCF — https://github.com/cilium/cilium-cli
+# Backend aqua:cilium/cilium-cli → official checksummed releases. The CLI version
+# is independent of the Cilium chart (1.17.0) it installs via `cilium install --version`.
+# Cooldown elapsed: 2026-07-28 → adopted 2026-08-24 (27 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:cilium/cilium-cli" = "0.19.7"
+
+# istioctl — T4 (dev machine). Vendor: Istio / CNCF — https://github.com/istio/istio
+# Backend aqua:istio/istio/istioctl → official checksummed releases. istioctl's
+# version determines the Istio control-plane version it installs, so it matches
+# the Istio platform chart (1.25.0).
+# Cooldown elapsed: 2025-03-04 → adopted 2026-08-24 (538 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:istio/istio/istioctl" = "1.25.0"
+
+# sops — T4 (dev machine). Vendor: getsops / CNCF — https://github.com/getsops/sops
+# Backend aqua:getsops/sops → official checksummed releases.
+# Cooldown elapsed: 2026-07-23 → adopted 2026-08-24 (32 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:getsops/sops" = "3.13.3"
+
+# age — T4 (dev machine). Vendor: Filippo Valsorda — https://github.com/FiloSottile/age
+# Backend aqua:FiloSottile/age → the author's official checksummed releases
+# (replaces the distro `apt install age`, which floats with the OS).
+# Cooldown elapsed: 2025-12-28 → adopted 2026-08-24 (239 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:FiloSottile/age" = "1.3.1"
+
+# age-plugin-yubikey — T4 (dev machine). Vendor: str4d (Jack Grigg) — https://github.com/str4d/age-plugin-yubikey
+# Backend github:str4d/age-plugin-yubikey → release assets from the author's own
+# GitHub repo (no aqua registry entry; the repo owner is the vendor, §2 satisfied).
+# Pinned to 0.5.0: it is the newest release that ships an x86_64-linux asset
+# (0.5.1 publishes only darwin/windows), so it is the version this repo installs.
+# Cooldown elapsed: 2024-08-04 → adopted 2026-08-24 (750 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"github:str4d/age-plugin-yubikey" = "0.5.0"
+
+# argocd — T4 (dev machine); the CLI used during bootstrap. Vendor: Argo Project / CNCF — https://github.com/argoproj/argo-cd
+# Backend aqua:argoproj/argo-cd → official checksummed releases. Pinned to v2.14.1
+# to match the ArgoCD server the argo-cd Helm chart 7.8.0 installs (appVersion v2.14.1).
+# Cooldown elapsed: 2025-02-03 → adopted 2026-08-24 (567 days ≥ 7, T4). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:argoproj/argo-cd" = "2.14.1"
+
+# ── Test-suite tools ──────────────────────────────────────────────────────────
+# These drive tests/run-regression.sh and the spicedb-provision scripts. They run
+# in CI (the test workflow) as well as locally, so they are T3 (14-day new-adoption
+# cooldown), like terraform.
+
+# conftest — T3. Vendor: Open Policy Agent / CNCF — https://github.com/open-policy-agent/conftest
+# Backend aqua:open-policy-agent/conftest → official checksummed releases. Runs the
+# static Rego policy checks in Phase 1 of the regression suite. Pinned to 0.58.0
+# (the in-use version): conftest 0.6x bundles the Rego v1 parser, which rejects the
+# repo's tests/conftest/policy/*.rego (written in Rego v0 syntax). Migrating those
+# policies to Rego v1 and bumping conftest is separate, out-of-epic work.
+# Cooldown elapsed: 2025-03-01 → adopted 2026-08-24 (541 days ≥ 14, T3). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:open-policy-agent/conftest" = "0.58.0"
+
+# opa — T3. Vendor: Open Policy Agent / CNCF — https://github.com/open-policy-agent/opa
+# Backend aqua:open-policy-agent/opa → official checksummed releases. Runs the OPA
+# unit tests (Phase 2). Pinned to 1.19.0: 1.19.1 is inside the 14-day cooldown.
+# Cooldown elapsed: 2026-07-30 → adopted 2026-08-24 (25 days ≥ 14, T3). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:open-policy-agent/opa" = "1.19.0"
+
+# trivy — T3. Vendor: Aqua Security — https://github.com/aquasecurity/trivy
+# Backend aqua:aquasecurity/trivy → official checksummed releases. Runs the config
+# scan (Phase 3a) and live k8s compliance scans (Phase 3b). Pinned to 0.73.0:
+# 0.74.0 is inside the 14-day cooldown.
+# Cooldown elapsed: 2026-08-03 → adopted 2026-08-24 (21 days ≥ 14, T3). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:aquasecurity/trivy" = "0.73.0"
+
+# bats — T3. Vendor: bats-core — https://github.com/bats-core/bats-core
+# Backend aqua:bats-core/bats-core → official checksummed releases. Runs the live
+# cluster tests (Phase 4).
+# Cooldown elapsed: 2026-07-21 → adopted 2026-08-24 (34 days ≥ 14, T3). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:bats-core/bats-core" = "1.14.0"
+
+# yq — T3. Vendor: Mike Farah — https://github.com/mikefarah/yq
+# Backend aqua:mikefarah/yq → the Go v4 yq's official checksummed releases (the
+# variant scripts/spicedb-provision.sh requires, not the Python yq). Pinned to
+# 4.53.3: 4.53.4/4.53.6 are inside the 14-day cooldown.
+# Cooldown elapsed: 2026-06-06 → adopted 2026-08-24 (79 days ≥ 14, T3). Approved: ADR-INFRA-012 §3/§4. Reviewed: 2026-08-24
+"aqua:mikefarah/yq" = "4.53.3"
+
+# ── Tasks ─────────────────────────────────────────────────────────────────────
+# Each task is the exact command the operational docs spell out, defined once so
+# a developer and CI run byte-identical commands (ADR-INFRA-017 §4–§5). The
+# terraform tasks take the environment (local | hetzner) as a positional argument,
+# matching the two-axis layout under infra/terraform/envs/. CI injects its own
+# flags through terraform's native TF_CLI_ARGS_<cmd> env vars (e.g. -auto-approve,
+# -no-color) so the task body stays identical to the local invocation.
+
+[tasks."tf:init"]
+description = "terraform init for an env: mise run tf:init <local|hetzner>"
+usage = 'arg "<env>" help="local | hetzner"'
+run = 'terraform -chdir=infra/terraform/envs/$usage_env init -input=false'
+
+[tasks."tf:validate"]
+description = "terraform validate for an env (run tf:init first): mise run tf:validate <local|hetzner>"
+usage = 'arg "<env>" help="local | hetzner"'
+run = 'terraform -chdir=infra/terraform/envs/$usage_env validate'
+
+[tasks."tf:plan"]
+description = "terraform plan for an env, writing tfplan: mise run tf:plan <local|hetzner>"
+usage = 'arg "<env>" help="local | hetzner"'
+run = 'terraform -chdir=infra/terraform/envs/$usage_env plan -input=false -out=tfplan'
+
+[tasks."tf:apply"]
+description = "terraform apply for an env: mise run tf:apply <local|hetzner>"
+usage = 'arg "<env>" help="local | hetzner"'
+run = 'terraform -chdir=infra/terraform/envs/$usage_env apply -input=false'
+
+[tasks."tf:fmt"]
+description = "rewrite terraform files to canonical format"
+run = "terraform fmt -recursive infra/terraform"
+
+[tasks."tf:fmt:check"]
+description = "fail if any terraform file is not canonically formatted"
+run = "terraform fmt -recursive -check infra/terraform"
+
+[tasks.test]
+description = "full regression suite (static + OPA + Trivy + bats; needs a live cluster for the live tiers)"
+run = "./tests/run-regression.sh"
+
+[tasks."test:static"]
+description = "regression suite, static phases only (no cluster required)"
+run = "./tests/run-regression.sh --static-only"
+
+[tasks."secrets:check"]
+description = "verify every infra/secrets/*.enc.yaml matches the .sops.yaml recipient set"
+run = "./tests/check-sops-recipients.sh"
+
+# ── Image-deploy loop ─────────────────────────────────────────────────────────
+# The mechanical halves of the build → push → (manual chart bump + commit) →
+# rollout loop documented in docs/IMAGE-DEPLOY.md. image:build and image:push
+# operate on the ../register sibling checkout (the app source + docker-compose that
+# builds the images); they are dev-machine only and are not run in CI. The version
+# bump and the chart-bump git commit in the middle of the loop stay manual — no
+# task commits on your behalf. frontend needs compose's `frontend` profile; irmin
+# carries the fixed tag 3.11-p1 (not APP_VERSION). See docs/IMAGE-DEPLOY.md.
+
+[tasks."image:build"]
+description = "build app image(s) from ../register: mise run image:build [all|register-server|frontend|irmin]"
+usage = 'arg "<service>" help="all | register-server | frontend | irmin" default="all"'
+dir = "../register"
+run = '''
+case "$usage_service" in
+  register-server) docker compose build register-server ;;
+  frontend)        docker compose --profile frontend build frontend ;;
+  irmin)           docker compose build irmin ;;
+  all)
+    docker compose build register-server
+    docker compose --profile frontend build frontend
+    docker compose build irmin
+    ;;
+  *) echo "unknown service: $usage_service (all|register-server|frontend|irmin)" >&2; exit 2 ;;
+esac
+'''
+
+[tasks."image:push"]
+description = "tag + push locally built images to a registry: mise run image:push [local|ghcr]"
+usage = 'arg "<registry>" help="local | ghcr" default="local"'
+dir = "../register"
+run = '''
+V=$(grep -oP 'APP_VERSION=\K.*' .env)
+case "$usage_registry" in
+  local) REG=k3d-registry.localhost:5000 ;;
+  ghcr)  REG=ghcr.io/risquanter ;;
+  *) echo "unknown registry: $usage_registry (local|ghcr)" >&2; exit 2 ;;
+esac
+# Push every image that was actually built locally; skip any that weren't (irmin
+# is only rebuilt when it changed). irmin keeps its fixed 3.11-p1 tag.
+for ref in "register-server:$V" "frontend:$V" "irmin-prod:3.11-p1"; do
+  if docker image inspect "local/$ref" >/dev/null 2>&1; then
+    docker tag "local/$ref" "$REG/$ref" && docker push "$REG/$ref"
+  else
+    echo "skip $ref (not built locally)"
+  fi
+done
+'''
+
+[tasks."deploy:refresh"]
+description = "force ArgoCD to re-read git for an app: mise run deploy:refresh [all|register|frontend]"
+usage = 'arg "<app>" help="all | register | frontend" default="all"'
+run = '''
+apps="$usage_app"
+[ "$apps" = all ] && apps="register frontend"
+for a in $apps; do
+  kubectl -n argocd annotate application "$a" argocd.argoproj.io/refresh=normal --overwrite
+done
+'''
+
+[tasks."deploy:rollout"]
+description = "watch the Deployment rollout for an app: mise run deploy:rollout [all|register|frontend]"
+usage = 'arg "<app>" help="all | register | frontend" default="all"'
+run = '''
+apps="$usage_app"
+[ "$apps" = all ] && apps="register frontend"
+for a in $apps; do
+  kubectl -n register rollout status deployment/"$a" --timeout=180s
+done
+'''

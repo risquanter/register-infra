@@ -35,48 +35,32 @@ The same tools work identically in CI containers.
 
 ### Required Tools
 
-| Tool | Version | Purpose | Install |
-|------|---------|---------|---------|
-| **bats-core** | ≥ 1.10 | Live cluster test runner | `sudo apt install bats` |
-| **conftest** | ≥ 0.55 | Static YAML policy checks | See below |
-| **opa** | ≥ 1.0 | OPA unit test runner | See below |
-| **trivy** | ≥ 0.60 | Security scanning (static + live) | See below |
-| kubectl | ≥ 1.28 | Cluster interaction (bats + Trivy k8s) | Pre-installed |
-| curl | any | HTTP probing (bats) | Pre-installed |
-| jq | ≥ 1.6 | JSON parsing | Pre-installed |
-| yq (mikefarah) | ≥ 4 | YAML→JSON in `scripts/spicedb-provision.sh` (K.6 job + its tests; Phase 4 runner image will need it too) | Single binary from GitHub releases |
+Every tool below except the base OS utilities is pinned in the repo's `mise.toml`
+and installed by a single `mise install` — see
+[MANUAL-BOOTSTRAP.md §0.3](MANUAL-BOOTSTRAP.md) and
+[ADR-INFRA-017](adr/ADR-INFRA-017.md). The exact version and supply-chain approval
+record for each lives in `mise.toml`; `mise.lock` records the verified checksum.
 
-### Tool Installation (Debian)
+| Tool | Purpose | Source |
+|------|---------|--------|
+| **bats-core** | Live cluster test runner (Phase 4) | `mise install` |
+| **conftest** | Static Rego policy checks (Phase 1) | `mise install` |
+| **opa** | OPA unit test runner (Phase 2) | `mise install` |
+| **trivy** | Security scanning — static + live (Phase 3) | `mise install` |
+| **yq** (mikefarah) | YAML→JSON in `scripts/spicedb-provision.sh` | `mise install` |
+| **kubectl** | Cluster interaction (bats + Trivy k8s) | `mise install` |
+| curl, jq | HTTP probing, JSON parsing | OS base packages |
+
+### Tool Installation
 
 ```bash
-# bats-core (Debian package)
-sudo apt install bats
+# Install mise once (its own vendor installer), then install the pinned toolchain.
+curl -fsSL https://mise.run | sh
+echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc && exec "$SHELL"
 
-# OPA (static binary)
-OPA_VERSION=1.4.2
-curl -L -o /tmp/opa \
-  "https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_linux_amd64_static"
-sudo install /tmp/opa /usr/local/bin/opa
-
-# conftest (static binary)
-CONFTEST_VERSION=0.58.0
-curl -L "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
-  | tar xz -C /tmp conftest
-sudo install /tmp/conftest /usr/local/bin/conftest
-
-# Trivy (official install script)
-curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-  | sh -s -- -b /tmp/trivy-bin
-sudo install /tmp/trivy-bin/trivy /usr/local/bin/trivy
-
-# yq — mikefarah, static binary, checksum-verified (ADR-INFRA-012 T4:
-# dev-machine tool; re-review as T1 when it enters the Phase 4 runner image)
-YQ_VERSION=v4.44.3
-curl -L -o /tmp/yq \
-  "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-echo "a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7  /tmp/yq" \
-  | sha256sum -c
-sudo install /tmp/yq /usr/local/bin/yq
+cd ~/projects/register-infra
+mise trust
+mise install     # conftest, opa, trivy, bats, yq, kubectl, … at the pinned versions
 ```
 
 ### Cluster Requirement
@@ -564,42 +548,29 @@ jobs:
   static-checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # Install tools — cache these in practice
-      - name: Install conftest
-        run: |
-          curl -sL https://github.com/open-policy-agent/conftest/releases/download/v0.58.0/conftest_0.58.0_Linux_x86_64.tar.gz \
-            | tar xz -C /usr/local/bin conftest
-      - name: Install OPA
-        run: |
-          curl -sL -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v1.4.2/opa_linux_amd64_static
-          chmod +x /usr/local/bin/opa
-      - name: Install Trivy
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin
+      - uses: actions/checkout@<sha>        # v4.x — SHA-pin in a real workflow
+      # jdx/mise-action installs the whole pinned toolchain from mise.toml
+      # (conftest, opa, trivy, …) — one step, same versions as local.
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654  # v4.2.4
+        with:
+          version: 2026.8.8
       - name: Static analysis
-        run: ./tests/run-regression.sh --static-only
+        run: mise run test:static
 
   live-tests:
     runs-on: ubuntu-latest
     needs: static-checks
     steps:
-      - uses: actions/checkout@v4
-      - name: Install tools
-        run: |
-          sudo apt-get update && sudo apt-get install -y bats
-          # ... same tool installs as above ...
+      - uses: actions/checkout@<sha>        # v4.x
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654  # v4.2.4
+        with:
+          version: 2026.8.8
       - name: Create k3d cluster
-        run: |
-          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-          k3d cluster create ci-test -p "8080:80@loadbalancer"
+        run: mise exec -- k3d cluster create ci-test -p "8080:80@loadbalancer"
       - name: Deploy workloads
-        run: |
-          # Apply manifests / ArgoCD sync
-          kubectl apply -k infra/
+        run: mise exec -- kubectl apply -k infra/
       - name: Live tests
-        run: ./tests/run-regression.sh --bats-only --allow-skip
+        run: mise exec -- ./tests/run-regression.sh --bats-only --allow-skip
 ```
 
 ### Key CI Considerations

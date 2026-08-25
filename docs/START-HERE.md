@@ -47,6 +47,13 @@ tool-agnostic state, **Platform Ready**, after which every path is identical.
   Terraform codebase creates the cluster and installs the same platform. It has
   two env roots: `envs/local` (points 1 and 2) and `envs/hetzner` (point 3).
 
+> **First, the toolchain.** Both tracks begin by installing the workstation CLIs
+> (kubectl, helm, k3d, cilium, istioctl, sops, age, argocd, terraform) with
+> **mise**, which pins every tool to an exact version from the committed
+> `mise.toml` — one `mise install`, identical to what CI resolves. See
+> [MANUAL-BOOTSTRAP.md §0.3](MANUAL-BOOTSTRAP.md) and
+> [ADR-INFRA-017](adr/ADR-INFRA-017.md).
+
 ## The pipeline (where the tracks meet)
 
 ```

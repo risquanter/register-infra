@@ -18,30 +18,34 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd  # v3.1.2
+      # Installs mise (pinned via version) and runs `mise install`, fetching the
+      # exact toolchain from mise.toml — including terraform 1.15.8. Replaces
+      # hashicorp/setup-terraform so CI and a developer resolve the same binaries
+      # from one manifest (ADR-INFRA-017 §4).
+      # Vendor: jdx (Jeff Dickey) — https://github.com/jdx/mise-action
+      # Pinned: v4.2.4 @ full SHA (T3 GitHub Action, ADR-INFRA-012 §3).
+      # Cooldown elapsed: 2026-08-01 → adopted 2026-08-24 (23 days ≥ 14, T3). Reviewed: 2026-08-24
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654  # v4.2.4
         with:
-          terraform_version: "1.15.8"
+          version: 2026.8.8
 
       - name: Terraform Init
-        working-directory: infra/terraform/envs/hetzner
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-        run: terraform init -input=false
+        run: mise run tf:init hetzner
 
       - name: Terraform Validate
-        working-directory: infra/terraform/envs/hetzner
-        run: terraform validate
+        run: mise run tf:validate hetzner
 
       - name: Terraform Plan
         id: plan
-        working-directory: infra/terraform/envs/hetzner
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
           TF_VAR_ssh_key_name: ${{ secrets.HCLOUD_SSH_KEY_NAME }}
           TF_VAR_operator_cidr: ${{ secrets.OPERATOR_CIDR }}
+          TF_CLI_ARGS_plan: "-no-color"
         run: |
-          terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
+          mise run tf:plan hetzner 2>&1 | tee infra/terraform/envs/hetzner/plan.txt
           echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Post plan as PR comment

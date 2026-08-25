@@ -47,6 +47,7 @@ Every artifact is pinned to an immutable reference. Mutable tags (`latest`, `mai
 | Helm chart | Exact `targetRevision` string (`"18.5.5"`, `"3.7.1"`) |
 | GitHub Action | Full commit SHA (`uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`) |
 | Terraform provider | Exact version constraint (`version = "= 1.9.8"`) in the config (`versions.tf` or `main.tf`) plus a committed `.terraform.lock.hcl` recording the checksums |
+| Host / CI CLI binary | Exact version in the tool-manager manifest (`mise.toml`), resolved through a §2-correct backend, plus a committed `mise.lock` recording checksums where the backend supports it. The mechanism is ADR-INFRA-017. |
 | IDE extension | Specific version in `.vscode/extensions.json` or equivalent lockfile |
 
 ### 4. Cooldown Periods
@@ -200,7 +201,8 @@ source:
 | `infra/argocd/apps/spicedb.yaml` | Local chart — official T1 chart unavailable (ADR-INFRA-016) |
 | `infra/terraform/envs/*/versions.tf` (providers) | T1/T4 Terraform providers — exact `=` pin + §6 approval record; checksums in each env root's committed `.terraform.lock.hcl` |
 | `infra/terraform/modules/platform/main.tf` (Helm releases) | T1 platform charts — approved upstream, exact version pinned in `modules/platform/variables.tf`, recorded in §7 |
-| `.github/workflows/*.yaml` | GitHub Actions — SHA pinning required (T3) |
+| `mise.toml` | Host & CI CLI toolchain — exact version pins via §2-correct backends, §6 approval records in-file (terraform + the test tools conftest/opa/trivy/bats/yq T3; kubectl/helm/k3d/cilium-cli/istioctl/sops/age/age-plugin-yubikey/argocd T4). Mechanism: ADR-INFRA-017 |
+| `.github/workflows/*.yaml` | GitHub Actions — SHA pinning required (T3). `jdx/mise-action` installs the pinned toolchain in CI (ADR-INFRA-017) |
 
 ---
 
@@ -216,6 +218,7 @@ source:
 ## References
 
 - ADR-INFRA-016 — Helm Chart Sourcing (local charts by default; chart-specific alternatives rejected)
+- ADR-INFRA-017 — Developer & CI Toolchain Management (mise as the toolchain and task-runner mechanism; CLI pinning defers to this ADR's §3 and §4)
 - CISA / NSA: *Defending Against Software Supply Chain Attacks* (2021)
 - OpenSSF SLSA framework: https://slsa.dev
 - Sigstore / Cosign (container image signing): https://www.sigstore.dev

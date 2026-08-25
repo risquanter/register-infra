@@ -68,26 +68,22 @@ recovery. It is **not** an ArgoCD cluster key — nothing automated ever uses it
 
 ## 0) Install age-plugin-yubikey
 
-> `age` and `sops` are installed by the per-environment prefix
-> ([MANUAL-BOOTSTRAP.md §0](MANUAL-BOOTSTRAP.md) /
-> [TERRAFORM-BOOTSTRAP.md §0](TERRAFORM-BOOTSTRAP.md)). This doc adds the
-> YubiKey plugin, which lets age use the YubiKey's PIV applet. The private key
-> is generated **on the chip** — it never exists on disk and cannot be exported.
+> `age`, `sops`, and the YubiKey plugin (`age-plugin-yubikey`, pinned to 0.5.0)
+> are all installed by `mise install` from the committed `mise.toml`
+> ([MANUAL-BOOTSTRAP.md §0.3](MANUAL-BOOTSTRAP.md) /
+> [TERRAFORM-BOOTSTRAP.md §0](TERRAFORM-BOOTSTRAP.md)). The plugin lets age use the
+> YubiKey's PIV applet; the private key is generated **on the chip** — it never
+> exists on disk and cannot be exported. This section adds the one thing mise does
+> not manage — the OS smart-card daemon — and confirms the plugin is present.
 
 ```bash
-# WHAT: pcscd is the smart-card daemon. Required for YubiKey PIV communication.
+# WHAT: pcscd is the smart-card daemon; it is an OS package (not a mise tool),
+#   required for YubiKey PIV communication.
 sudo apt-get install -y pcscd libpcsclite-dev
 
-# WHAT: install the age YubiKey plugin, pinned + checksum-verified.
-# SECURITY: verify the checksum against the release page before installing.
-AGE_YUBIKEY_VERSION="v0.5.0"
-curl -fsSLO "https://github.com/str4d/age-plugin-yubikey/releases/download/${AGE_YUBIKEY_VERSION}/age-plugin-yubikey-${AGE_YUBIKEY_VERSION}-x86_64-linux.tar.gz"
-# Compare against the SHA256SUMS published on the release page:
-#   https://github.com/str4d/age-plugin-yubikey/releases/tag/v0.5.0
-sha256sum age-plugin-yubikey-${AGE_YUBIKEY_VERSION}-x86_64-linux.tar.gz
-tar xzf age-plugin-yubikey-${AGE_YUBIKEY_VERSION}-x86_64-linux.tar.gz
-sudo install -m755 age-plugin-yubikey/age-plugin-yubikey /usr/local/bin/age-plugin-yubikey
-rm -rf age-plugin-yubikey age-plugin-yubikey-${AGE_YUBIKEY_VERSION}-x86_64-linux.tar.gz
+# WHAT: age-plugin-yubikey is pinned in mise.toml and was installed by
+#   `mise install`. Confirm it is on PATH (0.5.0 is the newest release with an
+#   x86_64-linux build; mise verified its checksum against mise.lock).
 age-plugin-yubikey --version
 ```
 
