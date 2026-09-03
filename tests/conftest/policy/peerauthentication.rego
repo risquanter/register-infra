@@ -14,20 +14,20 @@
 # ──────────────────────────────────────────────────────────────────────────────
 package main
 
-import future.keywords.in
+import rego.v1
 
 # Namespace-level PeerAuthentication must be STRICT.
 # Resources with a selector (workload-scoped) are port-level overrides
 # and are checked by the port-level rule below.
-deny[msg] {
-    input.kind == "PeerAuthentication"
-    not input.spec.selector          # namespace-level (no workload selector)
-    not input.spec.mtls.mode == "STRICT"
-    msg := sprintf("PeerAuthentication '%s/%s' must use STRICT mode, got '%s'", [
-        input.metadata.namespace,
-        input.metadata.name,
-        object.get(object.get(input.spec, "mtls", {}), "mode", "<unset>"),
-    ])
+deny contains msg if {
+	input.kind == "PeerAuthentication"
+	not input.spec.selector # namespace-level (no workload selector)
+	not input.spec.mtls.mode == "STRICT"
+	msg := sprintf("PeerAuthentication '%s/%s' must use STRICT mode, got '%s'", [
+		input.metadata.namespace,
+		input.metadata.name,
+		object.get(object.get(input.spec, "mtls", {}), "mode", "<unset>"),
+	])
 }
 
 # Known health probe ports where PERMISSIVE is architecturally required.
@@ -42,26 +42,26 @@ allowed_permissive_ports := {"8282", "8091", "8080", "9000", "50051"}
 
 # Port-level overrides must not use DISABLE (ever) or PERMISSIVE on
 # unexpected ports. PERMISSIVE is tolerated only on allowed_permissive_ports.
-deny[msg] {
-    input.kind == "PeerAuthentication"
-    port_mtls := input.spec.portLevelMtls[port]
-    port_mtls.mode == "DISABLE"
-    msg := sprintf("PeerAuthentication '%s/%s' port %v uses DISABLE — plaintext without mesh protection", [
-        input.metadata.namespace,
-        input.metadata.name,
-        port,
-    ])
+deny contains msg if {
+	input.kind == "PeerAuthentication"
+	port_mtls := input.spec.portLevelMtls[port]
+	port_mtls.mode == "DISABLE"
+	msg := sprintf("PeerAuthentication '%s/%s' port %v uses DISABLE — plaintext without mesh protection", [
+		input.metadata.namespace,
+		input.metadata.name,
+		port,
+	])
 }
 
-deny[msg] {
-    input.kind == "PeerAuthentication"
-    port_mtls := input.spec.portLevelMtls[port]
-    port_mtls.mode == "PERMISSIVE"
-    not port in allowed_permissive_ports
-    msg := sprintf("PeerAuthentication '%s/%s' port %v uses PERMISSIVE but is not a known health probe port (allowed: %v)", [
-        input.metadata.namespace,
-        input.metadata.name,
-        port,
-        allowed_permissive_ports,
-    ])
+deny contains msg if {
+	input.kind == "PeerAuthentication"
+	port_mtls := input.spec.portLevelMtls[port]
+	port_mtls.mode == "PERMISSIVE"
+	not port in allowed_permissive_ports
+	msg := sprintf("PeerAuthentication '%s/%s' port %v uses PERMISSIVE but is not a known health probe port (allowed: %v)", [
+		input.metadata.namespace,
+		input.metadata.name,
+		port,
+		allowed_permissive_ports,
+	])
 }

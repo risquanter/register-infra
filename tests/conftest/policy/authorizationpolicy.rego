@@ -7,28 +7,27 @@
 # ──────────────────────────────────────────────────────────────────────────────
 package main
 
-import future.keywords.in
-import future.keywords.every
+import rego.v1
 
 # Identity header names that must never appear in DENY policies.
 identity_headers := {"x-user-id", "x-user-email", "x-user-roles"}
 
 # Block any DENY AuthorizationPolicy that references identity headers in its
 # rules.  This catches the exact C1 bug pattern and any variant of it.
-deny[msg] {
-    input.kind == "AuthorizationPolicy"
-    input.spec.action == "DENY"
+deny contains msg if {
+	input.kind == "AuthorizationPolicy"
+	input.spec.action == "DENY"
 
-    # Walk the entire rules tree to find any header key reference.
-    rule := input.spec.rules[_]
-    walk(rule, [path, value])
-    is_string(value)
-    lower(value) == identity_headers[_]
+	# Walk the entire rules tree to find any header key reference.
+	rule := input.spec.rules[_]
+	walk(rule, [path, value])
+	is_string(value)
+	lower(value) == identity_headers[_]
 
-    msg := sprintf(
-        "AuthorizationPolicy '%s' has action DENY and references identity header '%s'. This pattern causes C1 regression — see ADR-INFRA-005 and SECURITY-FLOW.md.",
-        [input.metadata.name, value],
-    )
+	msg := sprintf(
+		"AuthorizationPolicy '%s' has action DENY and references identity header '%s'. This pattern causes C1 regression — see ADR-INFRA-005 and SECURITY-FLOW.md.",
+		[input.metadata.name, value],
+	)
 }
 
 # ALLOW policies must either have at least one rule with requestPrincipals (authenticated
@@ -36,24 +35,24 @@ deny[msg] {
 # A policy with only `to.operation.paths` rules is intentionally public — no
 # principal required because the path itself defines the access level
 # (e.g. allow-capability-urls for /w/*, /health).
-deny[msg] {
-    input.kind == "AuthorizationPolicy"
-    input.spec.action == "ALLOW"
-    not has_principal_rule
-    not is_public_path_only_policy
-    msg := sprintf("AuthorizationPolicy '%s' has ALLOW action but no rule with requestPrincipals — authenticated routes unprotected", [input.metadata.name])
+deny contains msg if {
+	input.kind == "AuthorizationPolicy"
+	input.spec.action == "ALLOW"
+	not has_principal_rule
+	not is_public_path_only_policy
+	msg := sprintf("AuthorizationPolicy '%s' has ALLOW action but no rule with requestPrincipals — authenticated routes unprotected", [input.metadata.name])
 }
 
-has_principal_rule {
-    input.spec.rules[_].from[_].source.requestPrincipals
+has_principal_rule if {
+	input.spec.rules[_].from[_].source.requestPrincipals
 }
 
 # All rules have `to` (path-based) and no `from` (no principal check).
 # This is the canonical public-route pattern (ADR-INFRA-007 §3).
-is_public_path_only_policy {
-    count(input.spec.rules) > 0
-    every rule in input.spec.rules {
-        not rule.from
-        rule.to
-    }
+is_public_path_only_policy if {
+	count(input.spec.rules) > 0
+	every rule in input.spec.rules {
+		not rule.from
+		rule.to
+	}
 }

@@ -14,52 +14,54 @@
 #   L3 (Helm values) — structural: production values.yaml references prod realm JSON
 package main
 
+import rego.v1
+
 # GUARD: only evaluate realm rules when the input is a Keycloak realm JSON.
 # Keycloak realm exports always contain a top-level "realm" string field.
-is_realm_json {
-  input.realm
-  is_string(input.realm)
+is_realm_json if {
+	input.realm
+	is_string(input.realm)
 }
 
 # deny if any client has ROPC (directAccessGrantsEnabled) enabled
-deny[msg] {
-  is_realm_json
-  client := input.clients[_]
-  client.directAccessGrantsEnabled == true
-  msg := sprintf(
-    "keycloak-realm: client '%s': directAccessGrantsEnabled must be false in the production realm (ROPC is deprecated in OAuth 2.1)",
-    [client.clientId],
-  )
+deny contains msg if {
+	is_realm_json
+	client := input.clients[_]
+	client.directAccessGrantsEnabled == true
+	msg := sprintf(
+		"keycloak-realm: client '%s': directAccessGrantsEnabled must be false in the production realm (ROPC is deprecated in OAuth 2.1)",
+		[client.clientId],
+	)
 }
 
 # deny if any client uses implicit flow (also deprecated in OAuth 2.1)
-deny[msg] {
-  is_realm_json
-  client := input.clients[_]
-  client.implicitFlowEnabled == true
-  msg := sprintf(
-    "keycloak-realm: client '%s': implicitFlowEnabled must be false (implicit flow is deprecated in OAuth 2.1)",
-    [client.clientId],
-  )
+deny contains msg if {
+	is_realm_json
+	client := input.clients[_]
+	client.implicitFlowEnabled == true
+	msg := sprintf(
+		"keycloak-realm: client '%s': implicitFlowEnabled must be false (implicit flow is deprecated in OAuth 2.1)",
+		[client.clientId],
+	)
 }
 
 # deny if the realm does not require SSL for external requests
-deny[msg] {
-  is_realm_json
-  input.sslRequired != "external"
-  input.sslRequired != "all"
-  msg := sprintf(
-    "keycloak-realm: sslRequired is '%v'; must be 'external' or 'all' in the production realm",
-    [input.sslRequired],
-  )
+deny contains msg if {
+	is_realm_json
+	input.sslRequired != "external"
+	input.sslRequired != "all"
+	msg := sprintf(
+		"keycloak-realm: sslRequired is '%v'; must be 'external' or 'all' in the production realm",
+		[input.sslRequired],
+	)
 }
 
 # warn if required roles are missing from the realm
-warn[msg] {
-  is_realm_json
-  roles := {r.name | r := input.roles.realm[_]}
-  required := {"editor", "analyst", "viewer", "team_admin"}
-  missing := required - roles
-  count(missing) > 0
-  msg := sprintf("keycloak-realm: realm roles missing: %v", [missing])
+warn contains msg if {
+	is_realm_json
+	roles := {r.name | r := input.roles.realm[_]}
+	required := {"editor", "analyst", "viewer", "team_admin"}
+	missing := required - roles
+	count(missing) > 0
+	msg := sprintf("keycloak-realm: realm roles missing: %v", [missing])
 }
