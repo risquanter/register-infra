@@ -749,6 +749,20 @@ for hardening register-server against compromise in the first place.
   production Keycloak hardening (`start` not `start-dev`, `KC_HOSTNAME_STRICT=true`).
   Code change (not doc-only).
 - [ ] **Observability namespace**: `infra/helm/namespaces/values.yaml` declares an `observability` namespace with no ArgoCD app, no ADR, and no workloads. Review `docs/` and the `register` repo docs to determine scope, then either remove it (YAGNI) or link it to a concrete ADR and deployment plan. Input from register docs: the app exports OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`, default `localhost:4317`) and Wave 3 adds `authz.check.total` / `authz.check.latency_ms` metrics — an OTel collector + backend would give the SpiceDB rollout observability from day one.
+- [ ] **Move dependency resolution into the builder images when image builds reach CI.**
+  Both application images resolve their Scala dependency tree during the image build
+  — `register-prod` runs `sbt "server/update; commonJVM/update"` and `frontend-prod`
+  runs `sbt "app/update; commonJS/update"` — and that layer is invalidated by any
+  change to `build.sbt` or `project/`. It sits *below* the toolchain layer, so no
+  builder base reaches it: `local/graalvm-builder` warms only the sbt launcher, and a
+  frontend builder base would have the same limit. On a developer's machine the local
+  Docker build cache hides the cost. On an ephemeral CI runner there is no cache, so
+  every build pays it in full, and it will be the dominant cost of the image pipeline.
+  Two candidate shapes, to decide when that pipeline is designed: bake a warm coursier
+  cache into the builder images and rebuild them on dependency changes rather than only
+  on toolchain changes, or mount a persistent cache into the build. Pipeline owner:
+  `register` TODO item 39 (image creation moving to GitHub Actions). Current image
+  layout and its rationale: `register` ADR-026 §4.
 - [ ] **Cross-repo status alignment**: done 2026-07-04; re-run 2026-07-05 against code (found AUTH-PHASES.md stale); **re-run 2026-07-06 — all three flagged app-side blockers confirmed resolved in code** (`register.spicedb` block, `BootstrapProvisionerSpiceDB`, server-it T-S1–T-S10), and AUTH-PHASES.md itself has since been refreshed to match (`85ebbd9`). **No app-side code blocker remains on the L2 critical path** — only an image deploy. Next re-run trigger: register image deployed to cluster (then re-verify Step 2 §auth-mode-switch status codes and Step 4 BATS suites live).
 
 ---
