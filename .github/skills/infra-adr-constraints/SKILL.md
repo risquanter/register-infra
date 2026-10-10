@@ -6,6 +6,14 @@ user-invokable: true
 
 # ADR Constraints Reference — Register Infra
 
+**This skill owns which design constraints bind.** It is the distillation of the
+accepted ADRs in `docs/adr/`, so that upholding them does not require reading
+all of them. It is lossy by design: it keeps each rule and drops its reasoning,
+so it cannot carry an interaction between two rules. Before writing code or
+manifests, check **When this skill is not enough** below — that section lists
+what you must be touching to need the full ADRs, and **Known interactions**
+records the traps that live between them.
+
 ## Boundary Ownership
 
 | Concern | Owner | Never in |
@@ -41,7 +49,7 @@ user-invokable: true
 | OPA reads `x-user-roles` header via `json.unmarshal` | `allow.rego` role extraction | ADR-INFRA-009 §2 |
 | `deny` conditions integrated via `not denied` inside `allow` | `allow.rego` decision path | ADR-INFRA-009 §3 |
 | `failure_mode_deny: true` with consequence comment referencing ADR-INFRA-002 | Every ext_authz EnvoyFilter | ADR-INFRA-002 §3 |
-| Two focused AuthorizationPolicies: `require-jwt` + `allow-capability-urls` | `register` namespace L7 policy | ADR-INFRA-007 §3 |
+| Two ALLOW AuthorizationPolicies (`require-jwt` + `allow-capability-urls`) plus the `deny-admin-paths` DENY | `register` namespace L7 policy | ADR-INFRA-007 §3, ADR-INFRA-004 §3 |
 | HTTPS-only Gateway on :443, cert from a cert-manager ClusterIssuer | External ingress (`infra/k8s/istio/ingress-gateway.yaml`) | ADR-INFRA-013 §2 |
 | `world` ingress allow scoped to the Gateway pod on 443 only | The single public front door under default-deny | ADR-INFRA-013 §3 |
 | `destination.server: https://kubernetes.default.svc` | Every ArgoCD Application | ADR-INFRA-014 §1 |
@@ -203,6 +211,84 @@ failure_mode_deny: true
 
 ---
 
+### Infrastructure Testing (ADR-INFRA-005)
+
+Three tools at three layers; match the tool to the assertion type.
+
+| Layer | Tool | Asserts on | Cluster? |
+|---|---|---|---|
+| Static policy | conftest (OPA/Rego) | YAML structure: required fields, prohibited patterns, label invariants | No |
+| Resource state | chainsaw (Kyverno) | Live resources match expected spec after ArgoCD sync | Yes |
+| Behavioural | bats-core | HTTP responses, Envoy `config_dump`, network-isolation probes | Yes |
+
+❌ NEVER assert a structural YAML invariant from a cluster-dependent test.
+✅ INSTEAD: conftest, which runs in CI on every PR with no cluster and catches
+the regression before merge.
+
+### SpiceDB Runtime (ADR-INFRA-010)
+
+❌ NEVER deploy SpiceDB from a vendor chart.
+✅ INSTEAD: the local chart `infra/helm/spicedb`, as an ArgoCD Application in
+project `infra` into the `infra` namespace. No official vendor chart exists, so
+under ADR-INFRA-016 the chart is authored here and the digest-pinned
+`ghcr.io/authzed/spicedb` image is the only external artifact.
+
+❌ NEVER run SpiceDB single-replica.
+✅ INSTEAD: `replicaCount: 2` plus a PDB (`minAvailable: 1`). The application
+treats any SpiceDB error as 403, which makes it fail-closed, and ADR-INFRA-002
+requires ≥ 2 replicas and a PDB of every fail-closed component.
+
+❌ NEVER leave a SpiceDB flow to the namespace default-deny by accident.
+✅ INSTEAD: NetworkPolicy names the flows explicitly — inbound from the register
+application pod, outbound to PostgreSQL within `infra`. Its two ports serve
+different consumers; everything else stays denied.
+
+### SpiceDB Schema Lifecycle (ADR-INFRA-011)
+
+The CI runner pod runs **inside** the cluster and applies the schema over the
+cluster network. Five invariants hold whatever CI vendor is used:
+
+1. the runner pod reaches `spicedb.infra:50051` (NetworkPolicy)
+2. the runner checks out the repo CI-natively
+3. the SpiceDB pre-shared key arrives via a CI secret or a mounted SOPS volume
+4. **no kubeconfig or cluster credential is stored outside the cluster**
+5. schema and code are atomic — the run that compiles the code applies the schema
+
+❌ NEVER apply the SpiceDB schema from outside the cluster, or store a
+kubeconfig anywhere a CI system can read it.
+✅ INSTEAD: dispatch to the in-cluster runner; no cluster credential leaves the
+cluster.
+
+❌ NEVER put `schema.zed` in this repo.
+✅ INSTEAD: the schema lives in the **application** repo and ships in the same
+pull request as the Scala code referencing the new permissions. This repo
+deploys the SpiceDB runtime only (ADR-INFRA-010).
+
+### Toolchain and Task Running (ADR-INFRA-017)
+
+❌ NEVER pin a tool version in a CI workflow input, or write a command string
+into a workflow that a developer runs differently locally.
+✅ INSTEAD: `mise.toml` at the repository root is the one place that pins every
+host and CI CLI tool to an exact version and defines the task commands. CI
+checks out, installs the toolchain via SHA-pinned `jdx/mise-action`, and calls
+`mise run <task>` — the same command a developer runs. Per-tool setup actions
+(`hashicorp/setup-terraform` and equivalents) are replaced by this pattern.
+
+❌ NEVER resolve a tool through the community asdf plugin registry, an
+aggregator, or a mirror.
+✅ INSTEAD: a backend that fetches the vendor's own release artifact — `core`,
+`aqua:`, or `ubi:`. The chosen backend is recorded in the `mise.toml` approval
+record so the resolution path is confirmable. This is ADR-INFRA-012 §2 applied
+to the toolchain, not a new rule.
+
+❌ NEVER treat `mise.toml` as outside supply-chain governance.
+✅ INSTEAD: exact version per tool with a committed `mise.lock` where the backend
+supports checksums — no ranges, no `latest`. Terraform runs in CI at build time
+and is **T3**; every other CLI is developer-only and **T4**; `jdx/mise-action` is
+T3 and SHA-pinned. Cooldown applies at adoption and each bump (T3 new adoption
+14 days, T4 7 days). Each tool carries the §6 approval comment block, which is
+project convention at T3/T4 rather than a §6 mandate.
+
 ### Multi-Environment Topology (ADR-INFRA-014 — awaiting implementation)
 
 ❌ NEVER register one cluster's ArgoCD against another cluster (`argocd cluster add`, remote `destination.server`).
@@ -220,6 +306,44 @@ failure_mode_deny: true
 
 ❌ NEVER scope SpiceDB `WriteRelationships` by bearer token alone.
 ✅ INSTEAD: ext_authz gate keyed on the caller's mTLS-verified SPIFFE identity with a static per-identity relation allowlist; reads (`Check`, `LookupResources`, `ReadSchema`) pass ungated.
+
+---
+
+## When this skill is not enough — read the full ADRs
+
+A distillation cannot carry an **interaction** between two rules: an interaction
+is written in neither rule's text and appears only when both apply to the same
+change. Coverage completeness does not fix that. So do not wait to notice a gap
+— a cross-cutting concern announces itself by *what you are touching*.
+
+| Touching | Read in full |
+|---|---|
+| A toolchain version, a CI workflow, or a task command | ADR-INFRA-017, ADR-INFRA-012 |
+| Replica count, a PDB, or any fail-closed component's availability | ADR-INFRA-002, ADR-INFRA-010 |
+| Where a Helm chart comes from | ADR-INFRA-016, ADR-INFRA-012, ADR-INFRA-010 |
+| The SpiceDB schema or any permission it names | ADR-INFRA-011, ADR-INFRA-010 — and the application repo |
+| An L7 control: JWT validation, header stripping, OPA ext_authz | ADR-INFRA-004, ADR-INFRA-005, ADR-INFRA-009 |
+| A NetworkPolicy or a cross-namespace flow | ADR-INFRA-004, ADR-INFRA-010, ADR-INFRA-008 |
+| How a secret is delivered or stored | ADR-INFRA-006, ADR-INFRA-011 |
+| A test, or deciding which layer an assertion belongs to | ADR-INFRA-005 |
+
+---
+
+## Known interactions — what no single ADR states
+
+Each row is a trap that exists only between ADRs. This table is the one part of
+this skill that is not derivable from the ADRs individually, so a change that
+creates a new interaction adds a row here.
+
+| ADRs | The trap |
+|---|---|
+| 017 × 012 | ADR-INFRA-017 adds **no** supply-chain rules — `mise.toml` is governed entirely by ADR-INFRA-012. Reading 017 alone suggests mise is its own regime; reading 012 alone leaves `mise.toml` out of scope. Sharper still: §6's approval block is formally mandated only at T1/T2, while recording it for the T3/T4 tools in `mise.toml` is project convention — so a strict §6 reading calls those blocks unnecessary and the convention calls their absence a defect. |
+| 010 × 002 × the application | SpiceDB's `replicaCount: 2` and PDB are a **security posture, not a performance setting**. The reason lives in the application — it treats any SpiceDB error as 403 — which makes SpiceDB fail-closed, which triggers ADR-INFRA-002's ≥ 2 replicas and PDB "in all environments, including dev". Tuning it down for a local cluster weakens authorization availability, and nothing in the chart says so. |
+| 010 × 016 | ADR-INFRA-016 makes a **local chart the default for every workload**, whether or not an official vendor chart exists; its official-chart exception is confined to the bootstrap platform layer installed by Terraform (Cilium, Istio, cert-manager, ArgoCD, Image Updater). So finding an official chart for a workload does not open the §2 exception — the local chart stays. |
+| 011 × 010 | A permission change spans **two repositories**: `schema.zed` and the Scala code that references it live in the application repo; the SpiceDB runtime lives here. The schema-and-code atomicity invariant is enforced by the application repo's CI run, not by anything in this repo. Looking for the schema here finds nothing, and changing the runtime here does not move the schema. |
+| 005 × 004 | ADR-INFRA-005's static conftest layer is where ADR-INFRA-004's L7 controls are actually asserted — the Rego that checks the `strip-identity-headers` EnvoyFilter removes `x-user-id`, `x-user-email` and `x-user-roles`. Change 004's header set without the Rego and the test still passes while the control is wrong. |
+| 011 × 006 | The SpiceDB pre-shared key has two sanctioned delivery paths — a CI secret, or a mounted SOPS volume. Its handling rules come from ADR-INFRA-006 and its delivery from ADR-INFRA-011, so neither ADR alone tells you whether a given arrangement is correct. |
+| 007 × 004 × 012 | The two ALLOW policies constrain **different dimensions**, and an ALLOW is satisfied when any policy matches. `require-jwt` constrains identity and carries no path clause, so one valid token admits every path; `allow-capability-urls` constrains path and not identity. A path absent from the capability list is therefore closed only while no caller holds a token — turning identity on opens it, which reads as the opposite of what adding authentication should do. Only a DENY policy, evaluated before every ALLOW, closes a path in both modes; `deny-admin-paths` is that policy for `/admin`. |
 
 ---
 

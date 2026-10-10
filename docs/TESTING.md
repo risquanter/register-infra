@@ -37,7 +37,7 @@ The same tools work identically in CI containers.
 
 Every tool below except the base OS utilities is pinned in the repo's `mise.toml`
 and installed by a single `mise install` — see
-[MANUAL-BOOTSTRAP.md §0.3](MANUAL-BOOTSTRAP.md) and
+[tutorial-paths/platform-local-byhand.md](tutorial-paths/platform-local-byhand.md) and
 [ADR-INFRA-017](adr/ADR-INFRA-017.md). The exact version and supply-chain approval
 record for each lives in `mise.toml`; `mise.lock` records the verified checksum.
 
@@ -209,6 +209,7 @@ Trivy cannot programmatically verify these controls and marks them as
 | `pod-security.bats` | 16 | Hardening | automount, non-root, readOnlyFS, hostNS, LimitRange |
 | `spicedb.bats` | 10 | L2 | SpiceDB health/PDB, register wiring (secret + env), live mesh probe (HTTP gateway through HBONE), schema loaded, wrong-key rejection |
 | `spicedb-provisioning.bats` | 11 | L2 | K.6 reconcile job: config flatten validation (fail-closed), live idempotence, orphan WARN+delete+strict-drift exit, owner_user survival (B-K6-4), no credential leakage |
+| `admin-path-deny.bats` | 13 | L1 | Mesh DENY on every /admin path: policy shape, waypoint RBAC config, in-cluster probe with nginx off the request path plus an authenticated control, ingress end to end |
 
 #### Trivy Overlap
 
@@ -223,11 +224,12 @@ Some bats tests skip gracefully when prerequisites are missing:
 
 | Condition | Affected Tests | Resolution |
 |-----------|----------------|------------|
-| No waypoint deployed | header-security Groups 1–3, opa-authz Groups 3–6 | Deploy waypoint (GITOPS-ROLLOUT §8–11) |
+| No waypoint deployed | header-security Groups 1–3, opa-authz Groups 3–6 | Deploy waypoint (tutorial-paths/gitops-rollout.md §8–11) |
 | Ingress unreachable | All HTTP-based tests | Configure ingress + port mapping |
 | No Keycloak token | Authenticated request tests (Groups 3, 5, 6) | Set `KEYCLOAK_TOKEN` or configure test user |
 | istioctl not found | ztunnel/proxy checks (3.4, 3.5 in mtls-enforcement) | Install istioctl |
 | No cluster reachable | spicedb-provisioning Group 2 (live reconcile) | Start k3d cluster |
+| deny-admin-paths policy or register app not deployed | admin-path-deny Groups 1–2 | Sync the mesh-policy and register Applications |
 
 ---
 
@@ -245,8 +247,8 @@ against the local k3d cluster. The layers build on each other:
 > **Prerequisites:** local k3d cluster running with all ArgoCD apps
 > synced, waypoint deployed (`istioctl waypoint apply -n register
 > --enroll-namespace`), and Keycloak realm provisioned with test users.
-> See [MANUAL-BOOTSTRAP.md](MANUAL-BOOTSTRAP.md) (cluster + platform) then
-> [GITOPS-ROLLOUT.md](GITOPS-ROLLOUT.md) §8–§11 (waypoint, Keycloak, auth tests).
+> See [tutorial-paths/platform-local-byhand.md](tutorial-paths/platform-local-byhand.md) (cluster + platform) then
+> [tutorial-paths/gitops-rollout.md](tutorial-paths/gitops-rollout.md) §8–§11 (waypoint, Keycloak, auth tests).
 
 ### Setup: port-forwards
 
@@ -414,7 +416,7 @@ The curl demos above are fully automated by the bats regression suite:
 |-----------|------------|------------|
 | L0 public routes | `opa-authz.bats` | Group 2: public route bypass |
 | L1 JWT accept/reject | `header-security.bats` | Groups 2–3: JWT validation |
-| L1 header stripping | `header-security.bats` | Group 1: forged header rejection |
+| L1 header stripping | `header-security.bats` | Groups 2–3: forged header stripped, not denied (2.4, 3.2, 3.4). Group 1 verifies the waypoint filter chain structurally |
 | L1 role gating | `opa-authz.bats` | Groups 3–6: auth/unauth, viewer, admin |
 | Network isolation (T1) | `network-isolation.bats` | Group 4: direct pod access blocked |
 
@@ -616,6 +618,7 @@ jobs:
 tests/
 ├── run-regression.sh               # Pipeline wrapper (all phases)
 ├── bats/
+│   ├── admin-path-deny.bats        # L1: mesh DENY on /admin paths
 │   ├── header-security.bats        # L1+L2: identity header security
 │   ├── health-probes.bats          # L0: probe reachability + config
 │   ├── mtls-enforcement.bats       # L0: mTLS + mesh identity
@@ -625,6 +628,7 @@ tests/
 │   ├── spicedb.bats                # L2: SpiceDB health + register wiring
 │   ├── spicedb-provisioning.bats   # L2: K.6 reconcile job behaviour
 │   └── helpers/
+│       ├── register-probe.bash     # Shared register-app probe-pod helper
 │       └── spicedb-probe.bash      # Shared SpiceDB probe-pod helper
 ├── conftest/
 │   └── policy/
