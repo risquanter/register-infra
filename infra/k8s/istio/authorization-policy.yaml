@@ -82,6 +82,71 @@ spec:
       # and OPA ext_authz still evaluates every request (allow.rego treats
       # /workspaces as a Layer 0 public route, matching this policy).
 
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-admin-paths
+  namespace: register
+spec:
+  # Same waypoint targetRef as the two ALLOW policies above, for the same
+  # reason: ztunnel evaluates L4 only, so an HTTP rule attached by selector is
+  # dropped and the policy denies nothing (ADR-INFRA-004 §3).
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: waypoint
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths:
+              - "/admin"
+              - "/admin/*"
+
+# WHY A DENY POLICY IS NEEDED AT ALL
+# Istio admits a request when ANY ALLOW policy matches it, so the two policies
+# above cannot express "no path under /admin". They constrain different
+# dimensions and each leaves the other free:
+#   - require-jwt constrains identity and not path. requestPrincipals: ["*"]
+#     matches any validated principal, and the rule carries no `to` clause, so
+#     one valid token admits every path — /admin included.
+#   - allow-capability-urls constrains path and not identity, and /admin is not
+#     in its list.
+# With no token, neither matches and the request is denied by default. With a
+# token, require-jwt matches and the request is allowed. A DENY is evaluated
+# before every ALLOW and holds in both cases, which is why it is the only rule
+# that closes this path.
+#
+# WHAT IS BEHIND THE PATH
+# One route: DELETE /admin/workspaces/expired, the on-demand equivalent of the
+# TTL sweep the application's background reaper performs on its own schedule.
+# Nothing else in the application serves a path under /admin — the cache
+# administration routes are /risk-trees/{id}/cache/* and /cache/clear-all, and
+# OPA gates those on the team_admin role.
+#
+# OPERATOR ACCESS IS RETAINED
+# This policy is attached to the waypoint, which only sees service-addressed
+# traffic. `kubectl port-forward` reaches the pod directly, so an operator with
+# cluster access can still trigger the sweep; a caller arriving over the
+# ingress cannot.
+#
+# WHY TWO PATH STRINGS
+# Istio reads a trailing /* as prefix "/admin/", which never matches the exact
+# string "/admin". Both entries are needed for the prefix and the bare path.
+#
+# WHY THIS IS NOT THE MISTAKE THE REMOVED POLICY MADE (see below)
+# That policy matched request.headers[x-user-id], a header the jwt_authn filter
+# re-adds from the validated token before the rbac filter runs, so it matched
+# every authenticated request. A request's path is not rewritten between
+# filters, so a path rule reads the same value the client sent.
+#
+# WHY NGINX IS NOT THE CONTROL
+# The SPA server has no /admin location, so the path falls to its catch-all and
+# the request never reaches the application. That holds only while nobody adds
+# such a location, and it is a routing table rather than an authorization
+# decision. This policy denies the path at the mesh, one hop before nginx.
+
 # ── REMOVED: deny-forwarded-identity-headers ─────────────────────────────────
 #
 # A DENY AuthorizationPolicy that checked request.headers[x-user-id] was here

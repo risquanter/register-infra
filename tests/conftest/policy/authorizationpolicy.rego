@@ -56,3 +56,41 @@ is_public_path_only_policy if {
 		rule.to
 	}
 }
+
+# A DENY AuthorizationPolicy must be attached to the waypoint Gateway. ztunnel
+# evaluates L4 only, so an HTTP rule (path, method, header) attached to pods by
+# selector is dropped: the policy reads as enforced and denies nothing
+# (ADR-INFRA-004 §3).
+deny contains msg if {
+	input.kind == "AuthorizationPolicy"
+	input.spec.action == "DENY"
+	not waypoint_targeted
+
+	msg := sprintf(
+		"AuthorizationPolicy '%s' has action DENY but is not attached to the waypoint Gateway. ztunnel cannot evaluate HTTP rules, so its rules would be silently dropped — see ADR-INFRA-004 §3.",
+		[input.metadata.name],
+	)
+}
+
+waypoint_targeted if {
+	input.spec.targetRef.kind == "Gateway"
+	input.spec.targetRef.name == "waypoint"
+}
+
+# A DENY rule carrying none of `to`, `from` or `when` matches every request and
+# takes the whole namespace offline. Istio accepts such a rule without
+# complaint, so nothing but this check stands between a dropped clause and a
+# total outage.
+deny contains msg if {
+	input.kind == "AuthorizationPolicy"
+	input.spec.action == "DENY"
+	rule := input.spec.rules[_]
+	not rule.to
+	not rule.from
+	not rule.when
+
+	msg := sprintf(
+		"AuthorizationPolicy '%s' has a DENY rule with no 'to', 'from' or 'when' clause. Such a rule matches every request and denies all traffic to the waypoint.",
+		[input.metadata.name],
+	)
+}
