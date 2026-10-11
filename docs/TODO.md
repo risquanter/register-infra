@@ -749,6 +749,37 @@ for hardening register-server against compromise in the first place.
   production Keycloak hardening (`start` not `start-dev`, `KC_HOSTNAME_STRICT=true`).
   Code change (not doc-only).
 - [ ] **Observability namespace**: `infra/helm/namespaces/values.yaml` declares an `observability` namespace with no ArgoCD app, no ADR, and no workloads. Review `docs/` and the `register` repo docs to determine scope, then either remove it (YAGNI) or link it to a concrete ADR and deployment plan. Input from register docs: the app exports OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`, default `localhost:4317`) and Wave 3 adds `authz.check.total` / `authz.check.latency_ms` metrics — an OTel collector + backend would give the SpiceDB rollout observability from day one.
+- [ ] **Distributed tracing is not configured in the mesh.** Verified 2026-10-11 at
+  `d66b5a8`. The `istiod` Helm release in `infra/terraform/modules/platform/main.tf`
+  sets one value, `profile = ambient`, and no `meshConfig`. Istio emits trace spans
+  only when a `Telemetry` resource names a tracing provider, or when
+  `meshConfig.enableTracing` is set together with `meshConfig.extensionProviders`.
+  Neither is present anywhere in this repository — no `kind: Telemetry`, no
+  `meshConfig` key. **Consequence for the application:** no `traceparent` header is
+  injected on requests reaching register, so no request can be correlated across the
+  mesh boundary and register has no incoming trace to join. Decide alongside the
+  observability-namespace item above: these are one piece of work, because a tracing
+  provider needs a collector to point at.
+- [ ] **Decide whether a collector is deployed at all, and in which environments.**
+  The two items above both presume one. If cluster-wide tracing is not wanted yet,
+  record that in an ADR and remove the `observability` namespace rather than leaving
+  it as a reservation — an empty namespace reads as pending work indefinitely.
+
+> **Telemetry responsibility boundary (settled 2026-10-11).** Every
+> infrastructure-side telemetry concern is this repository's: whether a collector
+> exists, whether the mesh emits spans, what the OpenTelemetry Protocol endpoint
+> resolves to inside a cluster, and what is retained. The `register` repository owns
+> only its own instrumentation — the typed identifiers it carries, the spans it
+> opens, and what it exports. Register targets what Docker Compose supports for
+> local development and treats that as sufficient; it carries no requirement for
+> cluster observability and does not block on this list.
+>
+> The application-side counterpart is
+> `docs/dev/plans/PLAN-TELEMETRY-PLUMBING.md` in the `register` repository. Its open
+> questions on whether register joins an incoming trace, and on what its exporter
+> endpoint should be, cannot be answered until the items above are. Neither
+> repository should rule in isolation.
+
 - [ ] **Move dependency resolution into the builder images when image builds reach CI.**
   Both application images resolve their Scala dependency tree during the image build
   — `register-prod` runs `sbt "server/update; commonJVM/update"` and `frontend-prod`
