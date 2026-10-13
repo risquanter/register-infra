@@ -774,11 +774,40 @@ for hardening register-server against compromise in the first place.
 > local development and treats that as sufficient; it carries no requirement for
 > cluster observability and does not block on this list.
 >
-> The application-side counterpart is
-> `docs/dev/plans/PLAN-TELEMETRY-PLUMBING.md` in the `register` repository. Its open
-> questions on whether register joins an incoming trace, and on what its exporter
-> endpoint should be, cannot be answered until the items above are. Neither
-> repository should rule in isolation.
+> The application-side counterpart is now
+> `docs/dev/plans/PLAN-ERROR-WIRE-BOUNDARY.md` in the `register` repository, which
+> absorbed the retired `PLAN-TELEMETRY-PLUMBING.md`. This note named two questions
+> neither repository could rule alone. Work landed application-side on 2026-10-13
+> answered the first outright and half of the second; the remaining half is this
+> repository's.
+>
+> **Answered — register mints its own trace rather than joining one.** A Tapir
+> request interceptor opens a single `SERVER` span around every request, so each
+> span a service opens below it is a child carrying the same trace identifier. The
+> reason it mints rather than joins is the finding in the tracing item above: no
+> `traceparent` header reaches register, so there is no incoming trace to continue.
+> If this repository later configures a tracing provider that does inject
+> `traceparent`, register has to change to continue that trace instead of starting a
+> new one. That change is the application side's to make, and this list is where it
+> would be triggered from.
+>
+> **Answered — what register exports is its own configuration.** One setting selects
+> between printing each span on the process's own output and sending it over gRPC to
+> a collector. Local development uses the first, so register needs no collector in
+> order to run, which is why it does not block on this list.
+>
+> **Still this repository's — what the endpoint resolves to in a cluster.**
+> Register's default is `http://localhost:4317`, where 4317 is OpenTelemetry's own
+> default port for its gRPC protocol. That address is correct only for a collector
+> running beside the process, so a cluster deployment has to supply the real one.
+>
+> **One consequence that bears on the collector decision above.** A failure response
+> register returns now carries the trace identifier of the request that failed, so a
+> user can quote it from the screen, and every log line that request wrote is
+> annotated with the same value. Without a collector the identifier still resolves
+> inside register's own logs, which is where it is most often needed. With one it
+> also resolves to a stored trace spanning the mesh. So a collector raises the value
+> of an identifier users can already quote, rather than being what makes it work.
 
 - [ ] **Move dependency resolution into the builder images when image builds reach CI.**
   Both application images resolve their Scala dependency tree during the image build
