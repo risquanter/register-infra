@@ -121,6 +121,13 @@ A bats failure or conftest violation encountered during work is **yours to fix**
 3. Document alignment or deviations in the planning proposal.
 4. Notify user immediately on any deviation.
 5. Wait for decision before proceeding.
+6. **A change that adds, amends or retires an ADR updates the
+   `infra-adr-constraints` distillation in the same change** — the new or
+   changed constraint, and any interaction it creates with an existing ADR,
+   added to that skill's interaction table. The distillation is what is loaded
+   instead of reading every ADR, so an ADR change that does not reach it is a
+   silent gap: an uncovered constraint reads exactly like no constraint. It is
+   in scope, never a follow-up.
 
 ### Review phase (after implementation)
 
